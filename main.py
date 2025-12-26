@@ -77,7 +77,7 @@ async def login():
 
         session['phone'] = phone
         session['phone_code_hash'] = send_code_response.to_dict().get('phone_code_hash')
-        session['code_type'] = str(send_code_response.type._)
+        session['code_type'] = type(send_code_response.type).__name__
         session['code_length'] = getattr(send_code_response.type, 'length', 5)
 
         return redirect(url_for('code'))
@@ -125,7 +125,7 @@ async def resend_code():
 
         # Update session with new code type
         session['phone_code_hash'] = resend_response.to_dict().get('phone_code_hash')
-        session['code_type'] = str(resend_response.type._)
+        session['code_type'] = type(resend_response.type).__name__
         session['code_length'] = getattr(resend_response.type, 'length', 5)
 
         return redirect(url_for('code'))
