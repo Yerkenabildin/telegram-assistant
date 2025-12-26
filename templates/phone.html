@@ -9,7 +9,8 @@
 
 <form method="POST" action="{{ url_for('login') }}">
     <label for="phone">Номер телефона:</label><br>
-    <input type="text" id="phone" name="phone" value=""><br>
+    <input type="tel" id="phone" name="phone" placeholder="+77012345678" required><br>
+    <small style="color: gray;">Формат: +код_страны номер (например, +77012345678)</small><br><br>
     <input type="submit" value="Отправить"><br>
 
     {% if error_text %}
