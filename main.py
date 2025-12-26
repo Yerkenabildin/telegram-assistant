@@ -12,6 +12,7 @@ from telethon.errors import SessionPasswordNeededError
 from telethon.sync import TelegramClient, events
 from telethon.tl import types
 from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.functions.auth import ResendCodeRequest
 from telethon.tl.types import MessageEntityCustomEmoji
 
 from models import Reply
@@ -117,7 +118,10 @@ async def resend_code():
 
     print(f"[RESEND] Requesting code resend for: {phone}")
     try:
-        resend_response = await client.resend_code(phone, phone_code_hash)
+        resend_response = await client(ResendCodeRequest(
+            phone_number=phone,
+            phone_code_hash=phone_code_hash
+        ))
         print(f"[RESEND] Code resent successfully!")
         print(f"  Type: {resend_response.type}")
         print(f"  Next type: {resend_response.next_type}")
@@ -131,6 +135,8 @@ async def resend_code():
         return redirect(url_for('code'))
     except Exception as err:
         print(f"[RESEND ERROR] Failed to resend code: {err}")
+        import traceback
+        traceback.print_exc()
         code_type = session.get('code_type', 'SentCodeTypeApp')
         code_length = session.get('code_length', 5)
         return await render_template('code.html', code_type=code_type, code_length=code_length, error_text=str(err))
