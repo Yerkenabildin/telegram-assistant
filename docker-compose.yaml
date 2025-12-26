@@ -1,7 +1,7 @@
 version: '0.0.1'
 services:
   app:
-    container_name: tg-helper
+    container_name: telegram-assistant
     image: "cr.yandex/crpm6kkscaeg5uqtfdqt/telegram-assistant:latest"
     restart: always
     env_file:
