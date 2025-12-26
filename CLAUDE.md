@@ -54,21 +54,23 @@ Required environment variables (set before running):
 - `PERSONAL_TG_LOGIN`: Your personal Telegram username/ID for notifications
 - `WORK_TG_LOGIN`: Work Telegram username/ID allowed to set auto-replies
 - `AVAILABLE_EMOJI_ID` (optional): Emoji status ID that disables auto-reply (default: 5810051751654460532)
+- `ASAP_WEBHOOK_URL` (optional): Webhook URL to call when ASAP message is detected (POST request with JSON payload: `{sender_username, sender_id, message}`)
 
 ## Event Handlers
 
 Three main Telethon event handlers in main.py:
 
-1. **setup_response** (line 101): Triggered by `/set_for` command from work account
+1. **setup_response** (line 171): Triggered by `/set_for` command from work account
    - Creates/updates emoji-to-message mapping in database
    - Expects exactly one custom emoji entity in the message
 
-2. **ASAP handler** (line 128): Detects urgent messages containing "asap" (case-insensitive)
+2. **ASAP handler** (line 199): Detects urgent messages containing "asap" (case-insensitive)
    - Only processes private messages
    - Checks if user is available (emoji status != available_emoji_id)
    - Forwards urgent notification to personal account
+   - Calls webhook if `ASAP_WEBHOOK_URL` is configured
 
-3. **Auto-reply handler** (line 153): Sends pre-configured responses
+3. **Auto-reply handler** (line 238): Sends pre-configured responses
    - Only processes private messages
    - Looks up message template based on current emoji status
    - Rate limits: Only sends if 15+ minutes since last message to that user
