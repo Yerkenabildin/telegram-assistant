@@ -17,9 +17,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Login to Yandex Container Registry
+      - name: Get IAM token and login to Yandex Container Registry
         run: |
-          echo "${{ secrets.YC_API_KEY }}" | docker login \
+          IAM_TOKEN=$(curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"apiKey\":\"${{ secrets.YC_API_KEY }}\"}" \
+            https://iam.api.cloud.yandex.net/iam/v1/tokens | jq -r '.iamToken')
+          echo "$IAM_TOKEN" | docker login \
             --username iam \
             --password-stdin cr.yandex
 
@@ -46,6 +50,10 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             cd ~/bots/telegram-assistant
-            echo "${{ secrets.YC_API_KEY }}" | docker login --username iam --password-stdin cr.yandex
+            IAM_TOKEN=$(curl -s -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"apiKey\":\"${{ secrets.YC_API_KEY }}\"}" \
+              https://iam.api.cloud.yandex.net/iam/v1/tokens | jq -r '.iamToken')
+            echo "$IAM_TOKEN" | docker login --username iam --password-stdin cr.yandex
             docker compose pull app
             docker compose up -d
