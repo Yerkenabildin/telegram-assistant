@@ -228,7 +228,17 @@ async def main():
 
 
 if __name__ == '__main__':
+    print("=== MAIN ENTRY POINT ===")
+    print(f"API_ID: {api_id}")
+    print(f"API_HASH: {'*' * len(api_hash) if api_hash else 'NOT SET'}")
+    print(f"SCRIPT_NAME: {environ.get('SCRIPT_NAME', 'NOT SET')}")
+    print("========================")
     try:
+        print("Starting event loop...")
         client.loop.run_until_complete(main())
     except KeyboardInterrupt:
         print("Application interrupted.")
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
