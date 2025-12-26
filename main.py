@@ -69,7 +69,11 @@ async def login():
     print(f"[LOGIN] Attempting to send code to: {phone}")
     try:
         send_code_response = await client.send_code_request(phone)
-        print(f"[LOGIN] Code sent successfully. Type: {send_code_response.type}")
+        print(f"[LOGIN] Code sent successfully!")
+        print(f"  Type: {send_code_response.type}")
+        print(f"  Next type: {send_code_response.next_type}")
+        print(f"  Timeout: {send_code_response.timeout}")
+        print(f"  Full response: {send_code_response.to_dict()}")
         session['phone'] = phone
         session['phone_code_hash'] = send_code_response.to_dict().get('phone_code_hash')
         return redirect(url_for('code'))
