@@ -26,7 +26,7 @@
 
 <form method="POST" action="{{ url_for('code') }}">
     <label for="code">Введите код:</label><br>
-    <input type="text" id="code" name="code" value="" required maxlength="{{ code_length }}" pattern="\d{{{ code_length }}}" inputmode="numeric"><br><br>
+    <input type="text" id="code" name="code" value="" required maxlength="{{ code_length }}" pattern="\d+" inputmode="numeric"><br><br>
     <input type="submit" value="Отправить"><br>
 
     {% if error_text %}
