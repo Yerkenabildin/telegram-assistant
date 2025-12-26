@@ -21,21 +21,6 @@ app = Quart(__name__)
 environ = os.environ
 app.secret_key = environ.get('SECRET_KEY', os.urandom(24))
 
-# Middleware to handle SCRIPT_NAME for reverse proxy
-class PrefixMiddleware:
-    def __init__(self, app, prefix=''):
-        self.app = app
-        self.prefix = prefix.rstrip('/')
-
-    async def __call__(self, scope, receive, send):
-        if scope['type'] == 'http' and self.prefix:
-            scope['root_path'] = self.prefix
-        return await self.app(scope, receive, send)
-
-script_name = environ.get('SCRIPT_NAME', '').rstrip('/')
-if script_name:
-    app.asgi_app = PrefixMiddleware(app.asgi_app, script_name)
-
 api_id = int(environ.get('API_ID'))
 available_emoji_id = int(environ.get('AVAILABLE_EMOJI_ID', 5810051751654460532))
 api_hash = environ.get('API_HASH')
