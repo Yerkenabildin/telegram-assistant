@@ -67,6 +67,12 @@ async def login():
 
     form = await request.form
     phone = form['phone']
+
+    # Check if code was already sent for this phone in current session
+    if session.get('phone') == phone and session.get('phone_code_hash'):
+        print(f"[LOGIN] Code already sent to {phone}, redirecting to code page")
+        return redirect(url_for('code'))
+
     print(f"[LOGIN] Attempting to send code to: {phone}")
     try:
         send_code_response = await client.send_code_request(phone)
