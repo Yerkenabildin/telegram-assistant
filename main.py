@@ -196,7 +196,7 @@ async def main():
         print("Starting application...")
 
         config = Config()
-        config.bind = ["0.0.0.0:8000"]
+        config.bind = ["0.0.0.0:5050"]
 
         await asyncio.gather(
             hypercorn.asyncio.serve(app, config),

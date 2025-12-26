@@ -2,9 +2,11 @@ version: '0.0.1'
 services:
   app:
     container_name: tg-helper
-    image: "telegram-assistant:0.0.1"
+    image: "cr.yandex/crpm6kkscaeg5uqtfdqt/telegram-assistant:latest"
     restart: always
     env_file:
       - .env
     volumes:
-      - ./storage:/app/storage
+      - /home/yerken/storage/telegram-assistant:/app/storage
+    ports:
+      - "5050:5050"
