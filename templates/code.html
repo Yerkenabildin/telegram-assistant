@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>telegram-assistant</title>
+</head>
+
+<body>
+
+<form method="POST" action="/code">
+    <label for="code">Код из сообщения:</label><br>
+    <input type="text" id="code" name="code" value=""><br>
+
+    <input type="submit" value="Отправить"><br>
+
+    {% if error_text %}
+    <label style="color:red">{{error_text}}</label><br>
+    {% endif %}
+</form>
+
+</body>
+</html>

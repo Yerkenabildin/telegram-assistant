@@ -1,0 +1,10 @@
+version: '0.0.1'
+services:
+  app:
+    container_name: tg-helper
+    image: "telegram-assistant:0.0.1"
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ./storage:/app/storage

@@ -1,0 +1,216 @@
+import asyncio
+import json
+import os
+
+import requests
+from datetime import timedelta
+
+import hypercorn
+from quart import Quart, render_template, request, redirect, url_for, session
+from hypercorn.config import Config
+from telethon.errors import SessionPasswordNeededError
+from telethon.sync import TelegramClient, events
+from telethon.tl import types
+from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.types import MessageEntityCustomEmoji
+
+from models import Reply
+
+app = Quart(__name__)
+
+environ = os.environ
+app.secret_key = environ.get('SECRET_KEY', os.urandom(24))
+
+api_id = int(environ.get('API_ID'))
+available_emoji_id = int(environ.get('AVAILABLE_EMOJI_ID', 5810051751654460532))
+api_hash = environ.get('API_HASH')
+personal_tg_login = environ.get('PERSONAL_TG_LOGIN')
+work_tg_login = environ.get('WORK_TG_LOGIN')
+
+client = TelegramClient("./storage/session", api_id, api_hash)
+
+
+@app.before_serving
+async def startup():
+    reply = Reply()
+    reply.createTable()
+
+
+@app.after_serving
+async def cleanup():
+    await client.disconnect()
+
+
+@app.route("/", methods=["GET", "POST"])
+async def login():
+    if await client.is_user_authorized():
+        return await render_template('success.html')
+
+    if request.method == 'GET':
+        return await render_template('phone.html')
+
+    form = await request.form
+    phone = form['phone']
+    try:
+        send_code_response = await client.send_code_request(phone)
+        session['phone'] = phone
+        session['phone_code_hash'] = send_code_response.to_dict().get('phone_code_hash')
+        return redirect(url_for('code'))
+    except Exception as err:
+        return await render_template('phone.html', error_text=str(err))
+
+
+@app.route("/code", methods=["GET", "POST"])
+async def code():
+    if request.method == 'GET':
+        return await render_template('code.html')
+
+    form = await request.form
+    phone = session.get('phone')
+    phone_code_hash = session.get('phone_code_hash')
+    code = form.get('code')
+
+    try:
+        await client.sign_in(phone, code=code, phone_code_hash=phone_code_hash)
+        return await render_template('success.html')
+    except SessionPasswordNeededError:
+        return redirect(url_for('two_factor'))
+    except Exception as err:
+        return await render_template('code.html', error_text=str(err))
+
+
+@app.route("/2fa", methods=["GET", "POST"])
+async def two_factor():
+    if request.method == 'GET':
+        return await render_template('2fa.html')
+
+    form = await request.form
+    phone = session.get('phone')
+    phone_code_hash = session.get('phone_code_hash')
+    password = form.get('password')
+
+    try:
+        await client.sign_in(phone, password=password, phone_code_hash=phone_code_hash)
+        return await render_template('success.html')
+    except SessionPasswordNeededError:
+        return redirect(url_for('code'))
+    except Exception as err:
+        return await render_template('2fa.html', error_text=str(err))
+
+
+@client.on(events.NewMessage(from_users=work_tg_login, pattern="/set_for.*"))
+async def setup_response(event):
+    chat_id = event.chat.id
+    msg_id = event.reply_to.reply_to_msg_id
+    message = await client.get_messages(chat_id, ids=msg_id)
+
+    entities = event.message.entities
+    if len(entities) != 1:
+        await client.send_message(
+            entity=chat_id,
+            reply_to=msg_id,
+            message=f"Должен быть 1 Эмоджи через пробел, найдено: {len(entities)}"
+        )
+        return
+
+    emoji = event.message.entities[0]
+    Reply.create(emoji.document_id, message)
+
+    await client(SendReactionRequest(
+        peer=chat_id,
+        msg_id=event.message.id,
+        reaction=[types.ReactionEmoji(
+            emoticon=u'\U0001fae1'
+        )]
+    ))
+
+
+@client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
+async def new_messages(event):
+    if not event.is_private:
+        return
+
+    me = await client.get_me()
+    if me.emoji_status.document_id == available_emoji_id:
+        return
+
+    sender = await event.get_sender()
+    await client.send_message(
+        personal_tg_login,
+        '❗️Срочный призыв от @' + sender.username,
+        formatting_entities=[MessageEntityCustomEmoji(offset=0, length=2, document_id=5379748062124056162)]
+    )
+
+    await client(SendReactionRequest(
+        peer=event.peer_id,
+        msg_id=event.message.id,
+        reaction=[types.ReactionEmoji(
+            emoticon=u'\U0001fae1'
+        )]
+    ))
+
+
+@client.on(events.NewMessage(incoming=True))
+async def new_messages(event):
+    if not event.is_private:
+        return
+
+    me = await client.get_me()
+
+    reply = Reply.get_by_emoji(me.emoji_status.document_id)
+    if reply is None:
+        return
+
+    message = reply.message
+    if message is None:
+        return
+
+    sender = await event.get_sender()
+    username = sender.username
+
+    messages = await client.get_messages(username, limit=2)
+    if len(messages) > 1:
+        difference = messages[0].date - messages[1].date
+        if difference < timedelta(minutes=15):
+            return
+
+    await client.send_message(
+        username,
+        message=message
+    )
+
+
+async def run_telethon():
+    print("Connecting Telethon client...")
+    await client.connect()
+    print("Connected Telethon client...")
+
+    while not await client.is_user_authorized():
+        await asyncio.sleep(3)
+
+    await client.run_until_disconnected()
+
+
+async def main():
+    try:
+        print("Starting application...")
+
+        config = Config()
+        config.bind = ["0.0.0.0:8000"]
+
+        await asyncio.gather(
+            hypercorn.asyncio.serve(app, config),
+            run_telethon()
+        )
+    except asyncio.CancelledError:
+        print("CancelledError: Gracefully shutting down...")
+    finally:
+        print("Disconnecting Telethon client...")
+        await client.disconnect()
+
+
+if __name__ == '__main__':
+    try:
+        client.loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        print("Application interrupted.")
