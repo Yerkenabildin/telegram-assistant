@@ -66,12 +66,15 @@ async def login():
 
     form = await request.form
     phone = form['phone']
+    print(f"[LOGIN] Attempting to send code to: {phone}")
     try:
         send_code_response = await client.send_code_request(phone)
+        print(f"[LOGIN] Code sent successfully. Type: {send_code_response.type}")
         session['phone'] = phone
         session['phone_code_hash'] = send_code_response.to_dict().get('phone_code_hash')
         return redirect(url_for('code'))
     except Exception as err:
+        print(f"[LOGIN ERROR] Failed to send code: {err}")
         return await render_template('phone.html', error_text=str(err))
 
 
