@@ -7,7 +7,7 @@
 
 <body>
 
-<form method="POST" action="/2fa">
+<form method="POST" action="{{ url_for('two_factor') }}">
     <label for="password">Пароль, если включина 2FA:</label><br>
     <input type="text" id="password" name="password" value=""><br>
     <input type="submit" value="Отправить"><br>
