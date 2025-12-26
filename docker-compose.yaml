@@ -6,6 +6,8 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      - SCRIPT_NAME=/telegram-assistant
     volumes:
       - /home/yerken/storage/telegram-assistant:/app/storage
     ports:
