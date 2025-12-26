@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 
+import aiohttp
 import requests
 from datetime import timedelta
 
@@ -42,6 +43,7 @@ available_emoji_id = int(environ.get('AVAILABLE_EMOJI_ID', 5810051751654460532))
 api_hash = environ.get('API_HASH')
 personal_tg_login = environ.get('PERSONAL_TG_LOGIN')
 work_tg_login = environ.get('WORK_TG_LOGIN')
+asap_webhook_url = environ.get('ASAP_WEBHOOK_URL')
 
 client = TelegramClient("./storage/session", api_id, api_hash)
 
@@ -195,7 +197,7 @@ async def setup_response(event):
 
 
 @client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
-async def new_messages(event):
+async def asap_handler(event):
     if not event.is_private:
         return
 
@@ -209,6 +211,20 @@ async def new_messages(event):
         '❗️Срочный призыв от @' + sender.username,
         formatting_entities=[MessageEntityCustomEmoji(offset=0, length=2, document_id=5379748062124056162)]
     )
+
+    # Call ASAP webhook if configured
+    if asap_webhook_url:
+        try:
+            async with aiohttp.ClientSession() as session:
+                payload = {
+                    'sender_username': sender.username,
+                    'sender_id': sender.id,
+                    'message': event.message.text,
+                }
+                async with session.post(asap_webhook_url, json=payload, timeout=10) as response:
+                    print(f"[ASAP WEBHOOK] Called {asap_webhook_url}, status: {response.status}")
+        except Exception as e:
+            print(f"[ASAP WEBHOOK ERROR] Failed to call webhook: {e}")
 
     await client(SendReactionRequest(
         peer=event.peer_id,
