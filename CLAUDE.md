@@ -52,25 +52,36 @@ Required environment variables (set before running):
 - `API_ID`: Telegram API ID (from my.telegram.org)
 - `API_HASH`: Telegram API hash
 - `PERSONAL_TG_LOGIN`: Your personal Telegram username/ID for notifications
-- `WORK_TG_LOGIN`: Work Telegram username/ID allowed to set auto-replies
 - `AVAILABLE_EMOJI_ID` (optional): Emoji status ID that disables auto-reply (default: 5810051751654460532)
 - `ASAP_WEBHOOK_URL` (optional): Webhook URL to call when ASAP message is detected (POST request with JSON payload: `{sender_username, sender_id, message}`)
 
 ## Event Handlers
 
-Three main Telethon event handlers in main.py:
+Main Telethon event handlers in main.py:
 
-1. **setup_response** (line 171): Triggered by `/set_for` command from work account
+1. **select_settings_chat**: Triggered by `/autoreply-settings` command (outgoing)
+   - Saves current chat as the settings chat for autoreply configuration
+   - Enables the autoreply bot functionality
+   - Deletes the command message after processing
+
+2. **disable_autoreply**: Triggered by `/autoreply-off` command (outgoing, only in settings chat)
+   - Disables the autoreply bot by clearing the settings chat
+   - Deletes the command message after processing
+
+3. **setup_response**: Triggered by `/set_for` command (outgoing, only in settings chat)
    - Creates/updates emoji-to-message mapping in database
    - Expects exactly one custom emoji entity in the message
+   - Must be a reply to the message to use as auto-reply template
 
-2. **ASAP handler** (line 199): Detects urgent messages containing "asap" (case-insensitive)
+4. **ASAP handler**: Detects urgent messages containing "asap" (case-insensitive)
+   - Only works when settings chat is selected (autoreply enabled)
    - Only processes private messages
    - Checks if user is available (emoji status != available_emoji_id)
    - Forwards urgent notification to personal account
    - Calls webhook if `ASAP_WEBHOOK_URL` is configured
 
-3. **Auto-reply handler** (line 238): Sends pre-configured responses
+5. **Auto-reply handler**: Sends pre-configured responses
+   - Only works when settings chat is selected (autoreply enabled)
    - Only processes private messages
    - Looks up message template based on current emoji status
    - Rate limits: Only sends if 15+ minutes since last message to that user
@@ -78,8 +89,9 @@ Three main Telethon event handlers in main.py:
 ## Data Persistence
 
 - Session file: `./storage/session` (Telethon auth token)
-- Database: `./storage/database.db` (SQLite with Reply table)
-- Table schema: `emoji` (TEXT), `_message` (serialized Telethon Message object)
+- Database: `./storage/database.db` (SQLite with Reply and Settings tables)
+- Reply table schema: `emoji` (TEXT), `_message` (serialized Telethon Message object)
+- Settings table schema: `key` (TEXT), `value` (TEXT) - stores `settings_chat_id` for the active settings chat
 
 ## Authentication Flow
 

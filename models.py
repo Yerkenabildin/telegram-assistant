@@ -48,3 +48,51 @@ class Reply(Model):
     @staticmethod
     def get_by_emoji(emoji):
         return Reply().selectOne(SQL().WHERE('emoji', '=', emoji))
+
+
+class Settings(Model):
+    def __init__(self, id=None):
+        Model.__init__(self, id, foreign_keys=True)
+
+    def tablename(self):
+        return 'settings'
+
+    def columns(self):
+        return [
+            {
+                'name': 'key',
+                'type': 'TEXT'
+            },
+            {
+                'name': 'value',
+                'type': 'TEXT'
+            }
+        ]
+
+    @staticmethod
+    def get(key):
+        setting = Settings().selectOne(SQL().WHERE('key', '=', key))
+        return setting.value if setting else None
+
+    @staticmethod
+    def set(key, value):
+        setting = Settings().selectOne(SQL().WHERE('key', '=', key))
+        if setting is None:
+            setting = Settings()
+        setting.key = key
+        setting.value = value
+        setting.save()
+
+    @staticmethod
+    def get_settings_chat_id():
+        value = Settings.get('settings_chat_id')
+        return int(value) if value else None
+
+    @staticmethod
+    def set_settings_chat_id(chat_id):
+        if chat_id is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'settings_chat_id'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('settings_chat_id', str(chat_id))
