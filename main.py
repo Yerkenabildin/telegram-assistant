@@ -59,6 +59,22 @@ async def cleanup():
     await client.disconnect()
 
 
+@app.route("/health")
+async def health():
+    """Healthcheck endpoint for Docker/Kubernetes"""
+    is_connected = client.is_connected()
+    is_authorized = await client.is_user_authorized() if is_connected else False
+
+    status = {
+        "status": "ok" if is_connected and is_authorized else "degraded",
+        "telethon_connected": is_connected,
+        "telethon_authorized": is_authorized,
+    }
+
+    status_code = 200 if status["status"] == "ok" else 503
+    return status, status_code
+
+
 @app.route("/", methods=["GET", "POST"])
 async def login():
     if await client.is_user_authorized():
@@ -172,19 +188,30 @@ async def two_factor():
 @client.on(events.NewMessage(from_users=work_tg_login, pattern="/set_for.*"))
 async def setup_response(event):
     chat_id = event.chat.id
-    msg_id = event.reply_to.reply_to_msg_id
-    message = await client.get_messages(chat_id, ids=msg_id)
 
-    entities = event.message.entities
-    if len(entities) != 1:
+    if not event.reply_to:
         await client.send_message(
             entity=chat_id,
-            reply_to=msg_id,
-            message=f"Должен быть 1 Эмоджи через пробел, найдено: {len(entities)}"
+            message="Команда должна быть ответом на сообщение"
         )
         return
 
-    emoji = event.message.entities[0]
+    msg_id = event.reply_to.reply_to_msg_id
+    message = await client.get_messages(chat_id, ids=msg_id)
+
+    entities = event.message.entities or []
+    # Filter only custom emojis (premium Telegram emojis with document_id)
+    custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+    if len(custom_emojis) != 1:
+        await client.send_message(
+            entity=chat_id,
+            reply_to=msg_id,
+            message=f"Нужен 1 кастомный эмодзи Telegram (премиум), найдено: {len(custom_emojis)}. Обычные эмодзи (🎄) не поддерживаются — используйте эмодзи из панели премиум-стикеров."
+        )
+        return
+
+    emoji = custom_emojis[0]
     Reply.create(emoji.document_id, message)
 
     await client(SendReactionRequest(
