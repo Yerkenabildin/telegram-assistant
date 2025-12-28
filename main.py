@@ -186,7 +186,7 @@ async def two_factor():
         return await render_template('2fa.html', error_text=str(err))
 
 
-@client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-settings$"))
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-settings\s*$"))
 async def select_settings_chat(event):
     chat_id = event.chat.id
     Settings.set_settings_chat_id(chat_id)
@@ -206,7 +206,7 @@ async def select_settings_chat(event):
     )
 
 
-@client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-off$"))
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-off\s*$"))
 async def disable_autoreply(event):
     settings_chat_id = Settings.get_settings_chat_id()
     chat_id = event.chat.id
