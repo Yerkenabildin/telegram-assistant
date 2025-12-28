@@ -111,10 +111,19 @@ class NotificationService:
         if not self.webhook_url:
             return False
 
+        # Format sender name
+        if sender_username:
+            sender_name = f"@{sender_username}"
+        else:
+            sender_name = f"ID:{sender_id}"
+
         payload = {
             'sender_username': sender_username,
             'sender_id': sender_id,
+            'sender_name': sender_name,
             'message': message_text,
+            'formatted_message': f"Срочный призыв от {sender_name}: {message_text}",
+            'title': f"❗ Срочное сообщение от {sender_name}",
         }
 
         try:
@@ -123,7 +132,7 @@ class NotificationService:
                 async with session.post(self.webhook_url, json=payload) as response:
                     success = response.status == 200
                     logger.info(
-                        f"Webhook call to {self.webhook_url}: "
+                        f"Webhook POST to {self.webhook_url}: "
                         f"status={response.status}, success={success}"
                     )
                     return success
