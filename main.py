@@ -186,21 +186,27 @@ async def two_factor():
         return await render_template('2fa.html', error_text=str(err))
 
 
-@client.on(events.NewMessage(outgoing=True, pattern="/autoreply-settings"))
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-settings$"))
 async def select_settings_chat(event):
     chat_id = event.chat.id
     Settings.set_settings_chat_id(chat_id)
+
+    # React to the command first
+    await client(SendReactionRequest(
+        peer=chat_id,
+        msg_id=event.message.id,
+        reaction=[types.ReactionEmoji(
+            emoticon=u'\u2705'  # ✅
+        )]
+    ))
 
     await client.send_message(
         entity=chat_id,
         message="✅ Этот чат выбран для настройки автоответчика.\n\nДоступные команды:\n• /set_for <эмодзи> — ответом на сообщение, чтобы задать автоответ для этого статуса\n• /autoreply-off — отключить автоответчик"
     )
 
-    # Delete the command message
-    await event.delete()
 
-
-@client.on(events.NewMessage(outgoing=True, pattern="/autoreply-off"))
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-off$"))
 async def disable_autoreply(event):
     settings_chat_id = Settings.get_settings_chat_id()
     chat_id = event.chat.id
@@ -210,15 +216,22 @@ async def disable_autoreply(event):
 
     Settings.set_settings_chat_id(None)
 
+    # React to the command first
+    await client(SendReactionRequest(
+        peer=chat_id,
+        msg_id=event.message.id,
+        reaction=[types.ReactionEmoji(
+            emoticon=u'\u274c'  # ❌
+        )]
+    ))
+
     await client.send_message(
         entity=chat_id,
         message="❌ Автоответчик отключен. Используйте /autoreply-settings в любом чате, чтобы снова включить."
     )
 
-    await event.delete()
 
-
-@client.on(events.NewMessage(outgoing=True, pattern="/set_for.*"))
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/set_for\s+.*"))
 async def setup_response(event):
     settings_chat_id = Settings.get_settings_chat_id()
     chat_id = event.chat.id
