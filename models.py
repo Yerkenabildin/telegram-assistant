@@ -3,6 +3,8 @@ Database models for telegram-assistant.
 
 Uses sqlitemodel ORM for SQLite persistence.
 """
+import json
+from datetime import datetime, date
 from typing import Optional, Any
 
 from sqlitemodel import Model, Database, SQL
@@ -11,6 +13,19 @@ from telethon.tl.types import Message
 
 # Configure database path (can be overridden by config)
 Database.DB_FILE = './storage/database.db'
+
+# Day name mappings for parsing
+DAY_NAMES = {
+    'пн': 0, 'mon': 0, 'пнд': 0,
+    'вт': 1, 'tue': 1, 'втр': 1,
+    'ср': 2, 'wed': 2, 'срд': 2,
+    'чт': 3, 'thu': 3, 'чтв': 3,
+    'пт': 4, 'fri': 4, 'птн': 4,
+    'сб': 5, 'sat': 5, 'суб': 5,
+    'вс': 6, 'sun': 6, 'вск': 6,
+}
+
+DAY_DISPLAY = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
 
 
 class Reply(Model):
@@ -166,3 +181,189 @@ class Settings(Model):
                 setting.delete()
         else:
             Settings.set('settings_chat_id', str(chat_id))
+
+
+class Schedule(Model):
+    """Model for storing emoji schedule rules"""
+
+    def __init__(self, id=None):
+        Model.__init__(self, id, foreign_keys=True)
+
+    def tablename(self):
+        return 'schedules'
+
+    def columns(self):
+        return [
+            {'name': 'emoji_id', 'type': 'TEXT'},      # Telegram custom emoji document_id
+            {'name': 'days', 'type': 'TEXT'},           # Comma-separated day numbers: "0,1,2,3,4" for Mon-Fri
+            {'name': 'time_start', 'type': 'TEXT'},     # "09:00"
+            {'name': 'time_end', 'type': 'TEXT'},       # "18:00"
+            {'name': 'priority', 'type': 'INTEGER'},    # Higher priority wins in conflicts
+            {'name': 'name', 'type': 'TEXT'},           # Human-readable rule name
+        ]
+
+    @staticmethod
+    def create(emoji_id, days, time_start, time_end, priority=0, name=""):
+        """Create a new schedule rule"""
+        schedule = Schedule()
+        schedule.emoji_id = str(emoji_id)
+        schedule.days = days if isinstance(days, str) else ','.join(map(str, days))
+        schedule.time_start = time_start
+        schedule.time_end = time_end
+        schedule.priority = priority
+        schedule.name = name
+        schedule.save()
+        return schedule
+
+    @staticmethod
+    def get_all():
+        """Get all schedule rules ordered by priority"""
+        return Schedule().select(SQL().ORDER_BY('priority', 'DESC')) or []
+
+    @staticmethod
+    def delete_all():
+        """Delete all schedule rules"""
+        for schedule in Schedule.get_all():
+            schedule.delete()
+
+    @staticmethod
+    def delete_by_id(schedule_id):
+        """Delete a schedule rule by ID"""
+        schedule = Schedule(schedule_id)
+        if schedule.emoji_id:  # exists
+            schedule.delete()
+            return True
+        return False
+
+    def get_days_list(self):
+        """Get days as list of integers"""
+        if not self.days:
+            return []
+        return [int(d) for d in self.days.split(',')]
+
+    def get_days_display(self):
+        """Get days as human-readable string"""
+        days = self.get_days_list()
+        if len(days) == 7:
+            return "каждый день"
+        if days == [0, 1, 2, 3, 4]:
+            return "ПН-ПТ"
+        if days == [5, 6]:
+            return "СБ-ВС"
+        return ', '.join(DAY_DISPLAY[d] for d in days)
+
+    def matches_now(self, now=None):
+        """Check if this schedule rule matches current time"""
+        if now is None:
+            now = datetime.now()
+
+        current_day = now.weekday()  # 0=Monday, 6=Sunday
+        current_time = now.strftime('%H:%M')
+
+        # Check if current day matches
+        if current_day not in self.get_days_list():
+            return False
+
+        # Check time range
+        start = self.time_start
+        end = self.time_end
+
+        # Handle overnight ranges (e.g., 22:00-06:00)
+        if start <= end:
+            # Normal range (e.g., 09:00-18:00)
+            return start <= current_time < end
+        else:
+            # Overnight range (e.g., 22:00-06:00)
+            return current_time >= start or current_time < end
+
+    @staticmethod
+    def get_current_emoji_id(now=None):
+        """Get the emoji_id that should be active right now based on schedule"""
+        if now is None:
+            now = datetime.now()
+
+        matching_rules = []
+        for schedule in Schedule.get_all():
+            if schedule.matches_now(now):
+                matching_rules.append(schedule)
+
+        if not matching_rules:
+            return None
+
+        # Return highest priority match
+        matching_rules.sort(key=lambda s: s.priority, reverse=True)
+        return int(matching_rules[0].emoji_id)
+
+    @staticmethod
+    def is_scheduling_enabled():
+        """Check if scheduling is enabled"""
+        return Settings.get('schedule_enabled') == 'true'
+
+    @staticmethod
+    def set_scheduling_enabled(enabled):
+        """Enable or disable scheduling"""
+        Settings.set('schedule_enabled', 'true' if enabled else 'false')
+
+
+def parse_days(days_str):
+    """Parse days string like 'ПН-ПТ' or 'ПН,СР,ПТ' into list of day numbers"""
+    days_str = days_str.lower().strip()
+
+    # Handle range like "ПН-ПТ"
+    if '-' in days_str:
+        parts = days_str.split('-')
+        if len(parts) == 2:
+            start = DAY_NAMES.get(parts[0].strip())
+            end = DAY_NAMES.get(parts[1].strip())
+            if start is not None and end is not None:
+                if start <= end:
+                    return list(range(start, end + 1))
+                else:
+                    # Wrap around (e.g., ПТ-ПН)
+                    return list(range(start, 7)) + list(range(0, end + 1))
+
+    # Handle comma-separated like "ПН,СР,ПТ"
+    if ',' in days_str:
+        result = []
+        for part in days_str.split(','):
+            day = DAY_NAMES.get(part.strip())
+            if day is not None:
+                result.append(day)
+        return sorted(result)
+
+    # Single day
+    day = DAY_NAMES.get(days_str)
+    if day is not None:
+        return [day]
+
+    return None
+
+
+def parse_time(time_str):
+    """Parse time string like '09:00' or '9:00'"""
+    time_str = time_str.strip()
+    try:
+        parts = time_str.split(':')
+        if len(parts) == 2:
+            hour = int(parts[0])
+            minute = int(parts[1])
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                return f"{hour:02d}:{minute:02d}"
+    except ValueError:
+        pass
+    return None
+
+
+def parse_time_range(range_str):
+    """Parse time range like '09:00-18:00'"""
+    if '-' not in range_str:
+        return None, None
+
+    parts = range_str.split('-')
+    if len(parts) != 2:
+        return None, None
+
+    start = parse_time(parts[0])
+    end = parse_time(parts[1])
+
+    return start, end

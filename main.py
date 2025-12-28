@@ -14,9 +14,11 @@ from telethon.sync import TelegramClient
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings
+from models import Reply, Settings, Schedule
 from routes import register_routes
 from handlers import register_handlers
+from telethon.tl.functions.account import UpdateEmojiStatusRequest
+from telethon.tl.types import EmojiStatus
 
 
 # =============================================================================
@@ -74,6 +76,7 @@ async def startup():
     """Initialize database tables on startup."""
     Reply().createTable()
     Settings().createTable()
+    Schedule().createTable()
     logger.info("Database tables initialized")
 
 
@@ -82,6 +85,54 @@ async def cleanup():
     """Disconnect Telethon client on shutdown."""
     await client.disconnect()
     logger.info("Telethon client disconnected")
+
+
+# =============================================================================
+# Schedule Checker
+# =============================================================================
+
+async def schedule_checker():
+    """Background task that checks schedule and updates emoji status."""
+    logger.info("Starting schedule checker...")
+
+    # Wait for client to be authorized
+    while not await client.is_user_authorized():
+        await asyncio.sleep(5)
+
+    logger.info("Schedule checker active")
+
+    while True:
+        try:
+            await asyncio.sleep(60)  # Check every minute
+
+            if not Schedule.is_scheduling_enabled():
+                continue
+
+            scheduled_emoji_id = Schedule.get_current_emoji_id()
+            if scheduled_emoji_id is None:
+                continue
+
+            # Get current actual status
+            me = await client.get_me()
+            current_emoji_id = me.emoji_status.document_id if me.emoji_status else None
+
+            # Only update if different from what schedule says it should be
+            if current_emoji_id != scheduled_emoji_id:
+                logger.info(f"Changing emoji status: {current_emoji_id} -> {scheduled_emoji_id}")
+                try:
+                    await client(UpdateEmojiStatusRequest(
+                        emoji_status=EmojiStatus(document_id=scheduled_emoji_id)
+                    ))
+                    logger.info(f"Emoji status updated to {scheduled_emoji_id}")
+                except Exception as e:
+                    logger.error(f"Failed to update emoji status: {e}")
+
+        except asyncio.CancelledError:
+            logger.info("Schedule checker stopped")
+            break
+        except Exception as e:
+            logger.error(f"Schedule checker error: {e}")
+            await asyncio.sleep(60)  # Wait before retrying on error
 
 
 # =============================================================================
@@ -99,6 +150,10 @@ async def run_telethon():
         await asyncio.sleep(3)
 
     logger.info("Telethon client authorized, starting event loop")
+
+    # Start schedule checker as a background task
+    asyncio.create_task(schedule_checker())
+
     await client.run_until_disconnected()
 
 

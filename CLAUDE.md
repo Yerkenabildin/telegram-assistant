@@ -138,6 +138,23 @@ Main Telethon event handlers in `main.py`:
 | `/resend` | POST | Request code re-delivery |
 | `/2fa` | GET/POST | Two-factor authentication password |
 
+7. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
+   - `/schedule` - Show help for schedule commands
+   - `/schedule work <emoji>` - Set work hours (Mon-Fri 09:00-18:00)
+   - `/schedule weekends <emoji>` - Set weekends (Fri 18:00 - Sun 23:59)
+   - `/schedule rest <emoji>` - Set rest time (all other time, low priority)
+   - `/schedule add <days> <time> <emoji>` - Add custom rule (e.g., `ПН-ПТ 09:00-18:00`)
+   - `/schedule list` - Show all schedule rules
+   - `/schedule del <ID>` - Delete rule by ID
+   - `/schedule clear` - Delete all rules
+   - `/schedule on/off` - Enable/disable scheduling
+   - `/schedule status` - Show current status
+
+8. **Schedule checker**: Background task (runs every minute)
+   - Checks if scheduling is enabled
+   - Gets the emoji that should be active based on current time
+   - Updates Telegram emoji status if it differs from scheduled
+
 ## Data Persistence
 
 ### Database Schema
@@ -162,7 +179,10 @@ CREATE TABLE settings (
 
 ### Files
 - Session file: `./storage/session` (Telethon auth token)
-- Database: `./storage/database.db` (SQLite)
+- Database: `./storage/database.db` (SQLite with Reply, Settings, and Schedule tables)
+- Reply table schema: `emoji` (TEXT), `_message` (serialized Telethon Message object)
+- Settings table schema: `key` (TEXT), `value` (TEXT) - stores `settings_chat_id` and `schedule_enabled`
+- Schedule table schema: `emoji_id` (TEXT), `days` (TEXT), `time_start` (TEXT), `time_end` (TEXT), `priority` (INT), `name` (TEXT)
 
 ## Authentication Flow
 
