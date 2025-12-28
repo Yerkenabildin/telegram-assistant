@@ -186,8 +186,15 @@ async def two_factor():
         return await render_template('2fa.html', error_text=str(err))
 
 
+# Debug handler to log all outgoing messages
+@client.on(events.NewMessage(outgoing=True))
+async def debug_outgoing(event):
+    print(f"[DEBUG] Outgoing message: '{event.message.text}' in chat {event.chat_id}")
+
+
 @client.on(events.NewMessage(outgoing=True, pattern=r"^/autoreply-settings\s*$"))
 async def select_settings_chat(event):
+    print(f"[DEBUG] /autoreply-settings triggered in chat {event.chat_id}")
     chat_id = event.chat.id
     Settings.set_settings_chat_id(chat_id)
 
