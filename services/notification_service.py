@@ -24,8 +24,7 @@ class NotificationService:
         personal_tg_login: str,
         available_emoji_id: int,
         webhook_url: Optional[str] = None,
-        webhook_timeout: int = 10,
-        webhook_method: str = 'POST'
+        webhook_timeout: int = 10
     ):
         """
         Initialize the notification service.
@@ -35,13 +34,11 @@ class NotificationService:
             available_emoji_id: Emoji ID that indicates "available" status
             webhook_url: Optional URL to call for ASAP alerts
             webhook_timeout: Timeout for webhook calls in seconds
-            webhook_method: HTTP method for webhook calls (POST or GET)
         """
         self.personal_tg_login = personal_tg_login
         self.available_emoji_id = available_emoji_id
         self.webhook_url = webhook_url
         self.webhook_timeout = webhook_timeout
-        self.webhook_method = webhook_method.upper()
 
     def should_notify_asap(
         self,
@@ -132,24 +129,13 @@ class NotificationService:
         try:
             timeout = aiohttp.ClientTimeout(total=self.webhook_timeout)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                if self.webhook_method == 'GET':
-                    # For GET, pass data as query parameters
-                    async with session.get(self.webhook_url, params=payload) as response:
-                        success = response.status == 200
-                        logger.info(
-                            f"Webhook GET to {self.webhook_url}: "
-                            f"status={response.status}, success={success}"
-                        )
-                        return success
-                else:
-                    # Default to POST with JSON body
-                    async with session.post(self.webhook_url, json=payload) as response:
-                        success = response.status == 200
-                        logger.info(
-                            f"Webhook POST to {self.webhook_url}: "
-                            f"status={response.status}, success={success}"
-                        )
-                        return success
+                async with session.post(self.webhook_url, json=payload) as response:
+                    success = response.status == 200
+                    logger.info(
+                        f"Webhook POST to {self.webhook_url}: "
+                        f"status={response.status}, success={success}"
+                    )
+                    return success
         except asyncio.TimeoutError:
             logger.error(f"Webhook timeout after {self.webhook_timeout}s: {self.webhook_url}")
             return False

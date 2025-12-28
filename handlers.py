@@ -21,8 +21,7 @@ _notification_service = NotificationService(
     personal_tg_login=config.personal_tg_login,
     available_emoji_id=config.available_emoji_id,
     webhook_url=config.asap_webhook_url,
-    webhook_timeout=config.webhook_timeout_seconds,
-    webhook_method=config.asap_webhook_method
+    webhook_timeout=config.webhook_timeout_seconds
 )
 
 
