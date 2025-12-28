@@ -55,31 +55,38 @@ Required environment variables (set before running):
 - `WORK_TG_LOGIN`: Work Telegram username/ID allowed to set auto-replies
 - `AVAILABLE_EMOJI_ID` (optional): Emoji status ID that disables auto-reply (default: 5810051751654460532)
 - `ASAP_WEBHOOK_URL` (optional): Webhook URL to call when ASAP message is detected (POST request with JSON payload: `{sender_username, sender_id, message}`)
+- `CHAT_AUTO_REPLY_ID` (optional): Chat ID for separate auto-reply settings. For supergroups use `-100{chat_id}` format (e.g., `-1005136892854`)
 
 ## Event Handlers
 
-Three main Telethon event handlers in main.py:
+Four main Telethon event handlers in main.py:
 
-1. **setup_response** (line 171): Triggered by `/set_for` command from work account
-   - Creates/updates emoji-to-message mapping in database
+1. **setup_response**: Triggered by `/set_for` command from work account
+   - Creates/updates global emoji-to-message mapping in database
    - Expects exactly one custom emoji entity in the message
 
-2. **ASAP handler** (line 199): Detects urgent messages containing "asap" (case-insensitive)
+2. **setup_chat_response**: Triggered by `/set_for_chat` command from work account
+   - Creates/updates chat-specific emoji-to-message mapping (uses `CHAT_AUTO_REPLY_ID`)
+   - Expects exactly one custom emoji entity in the message
+   - Reacts with 💬 to indicate chat-specific setting
+
+3. **ASAP handler**: Detects urgent messages containing "asap" (case-insensitive)
    - Only processes private messages
    - Checks if user is available (emoji status != available_emoji_id)
    - Forwards urgent notification to personal account
    - Calls webhook if `ASAP_WEBHOOK_URL` is configured
 
-3. **Auto-reply handler** (line 238): Sends pre-configured responses
-   - Only processes private messages
-   - Looks up message template based on current emoji status
-   - Rate limits: Only sends if 15+ minutes since last message to that user
+4. **Auto-reply handler**: Sends pre-configured responses
+   - Processes private messages and messages from `CHAT_AUTO_REPLY_ID` chat
+   - For `CHAT_AUTO_REPLY_ID` chat: uses chat-specific settings, falls back to global
+   - For private messages: uses global settings only
+   - Rate limits (private only): Only sends if 15+ minutes since last message to that user
 
 ## Data Persistence
 
 - Session file: `./storage/session` (Telethon auth token)
 - Database: `./storage/database.db` (SQLite with Reply table)
-- Table schema: `emoji` (TEXT), `_message` (serialized Telethon Message object)
+- Table schema: `emoji` (TEXT), `_message` (serialized Telethon Message object), `chat_id` (INTEGER, nullable - NULL for global settings)
 
 ## Authentication Flow
 

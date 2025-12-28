@@ -33,18 +33,38 @@ class Reply(Model):
             {
                 'name': '_message',
                 'type': 'TEXT'
+            },
+            {
+                'name': 'chat_id',
+                'type': 'INTEGER'
             }
         ]
 
     @staticmethod
-    def create(emoji="", msg=None):
-        reply = Reply.get_by_emoji(emoji)
+    def create(emoji="", msg=None, chat_id=None):
+        reply = Reply.get_by_emoji_and_chat(emoji, chat_id)
         if reply is None:
             reply = Reply()
         reply.emoji = emoji
         reply.message = msg
+        reply.chat_id = chat_id
         reply.save()
 
     @staticmethod
     def get_by_emoji(emoji):
-        return Reply().selectOne(SQL().WHERE('emoji', '=', emoji))
+        return Reply().selectOne(SQL().WHERE('emoji', '=', emoji).AND('chat_id', 'IS', None))
+
+    @staticmethod
+    def get_by_emoji_and_chat(emoji, chat_id=None):
+        if chat_id is None:
+            return Reply().selectOne(SQL().WHERE('emoji', '=', emoji).AND('chat_id', 'IS', None))
+        return Reply().selectOne(SQL().WHERE('emoji', '=', emoji).AND('chat_id', '=', chat_id))
+
+    @staticmethod
+    def get_reply_for_context(emoji, chat_id=None):
+        """Get reply: first check chat-specific, then fall back to global"""
+        if chat_id:
+            chat_reply = Reply.get_by_emoji_and_chat(emoji, chat_id)
+            if chat_reply:
+                return chat_reply
+        return Reply.get_by_emoji(emoji)

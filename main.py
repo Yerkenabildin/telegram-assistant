@@ -44,6 +44,10 @@ api_hash = environ.get('API_HASH')
 personal_tg_login = environ.get('PERSONAL_TG_LOGIN')
 work_tg_login = environ.get('WORK_TG_LOGIN')
 asap_webhook_url = environ.get('ASAP_WEBHOOK_URL')
+# Chat ID for separate auto-reply settings (e.g., -1005136892854 for supergroups)
+chat_auto_reply_id = environ.get('CHAT_AUTO_REPLY_ID')
+if chat_auto_reply_id:
+    chat_auto_reply_id = int(chat_auto_reply_id)
 
 client = TelegramClient("./storage/session", api_id, api_hash)
 
@@ -223,6 +227,51 @@ async def setup_response(event):
     ))
 
 
+@client.on(events.NewMessage(from_users=work_tg_login, pattern="/set_for_chat.*"))
+async def setup_chat_response(event):
+    """Set auto-reply for specific chat (configured via CHAT_AUTO_REPLY_ID)"""
+    chat_id = event.chat.id
+
+    if not chat_auto_reply_id:
+        await client.send_message(
+            entity=chat_id,
+            message="CHAT_AUTO_REPLY_ID не настроен в переменных окружения"
+        )
+        return
+
+    if not event.reply_to:
+        await client.send_message(
+            entity=chat_id,
+            message="Команда должна быть ответом на сообщение"
+        )
+        return
+
+    msg_id = event.reply_to.reply_to_msg_id
+    message = await client.get_messages(chat_id, ids=msg_id)
+
+    entities = event.message.entities or []
+    custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+    if len(custom_emojis) != 1:
+        await client.send_message(
+            entity=chat_id,
+            reply_to=msg_id,
+            message=f"Нужен 1 кастомный эмодзи Telegram (премиум), найдено: {len(custom_emojis)}. Обычные эмодзи (🎄) не поддерживаются — используйте эмодзи из панели премиум-стикеров."
+        )
+        return
+
+    emoji = custom_emojis[0]
+    Reply.create(emoji.document_id, message, chat_id=chat_auto_reply_id)
+
+    await client(SendReactionRequest(
+        peer=chat_id,
+        msg_id=event.message.id,
+        reaction=[types.ReactionEmoji(
+            emoticon=u'\U0001f4ac'  # 💬 emoji to indicate chat-specific setting
+        )]
+    ))
+
+
 @client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
 async def asap_handler(event):
     if not event.is_private:
@@ -264,12 +313,30 @@ async def asap_handler(event):
 
 @client.on(events.NewMessage(incoming=True))
 async def new_messages(event):
-    if not event.is_private:
-        return
-
     me = await client.get_me()
 
-    reply = Reply.get_by_emoji(me.emoji_status.document_id)
+    # Check if we have emoji status
+    if not me.emoji_status or not hasattr(me.emoji_status, 'document_id'):
+        return
+
+    sender = await event.get_sender()
+    if not sender:
+        return
+
+    # Determine which chat_id to use for lookup
+    current_chat_id = event.chat.id if event.chat else None
+
+    # Check if this is from the configured chat for separate settings
+    if chat_auto_reply_id and current_chat_id == chat_auto_reply_id:
+        # Use chat-specific settings with fallback to global
+        reply = Reply.get_reply_for_context(me.emoji_status.document_id, chat_auto_reply_id)
+    elif event.is_private:
+        # Private messages use global settings only
+        reply = Reply.get_by_emoji(me.emoji_status.document_id)
+    else:
+        # Other group chats - ignore
+        return
+
     if reply is None:
         return
 
@@ -277,19 +344,29 @@ async def new_messages(event):
     if message is None:
         return
 
-    sender = await event.get_sender()
     username = sender.username
 
-    messages = await client.get_messages(username, limit=2)
-    if len(messages) > 1:
-        difference = messages[0].date - messages[1].date
-        if difference < timedelta(minutes=15):
-            return
+    # Rate limiting: only for private chats
+    if event.is_private and username:
+        messages = await client.get_messages(username, limit=2)
+        if len(messages) > 1:
+            difference = messages[0].date - messages[1].date
+            if difference < timedelta(minutes=15):
+                return
 
-    await client.send_message(
-        username,
-        message=message
-    )
+    # Send reply
+    if event.is_private and username:
+        await client.send_message(
+            username,
+            message=message
+        )
+    else:
+        # For group chats, reply to the message
+        await client.send_message(
+            current_chat_id,
+            message=message,
+            reply_to=event.message.id
+        )
 
 
 async def run_telethon():
