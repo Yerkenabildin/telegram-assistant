@@ -9,7 +9,7 @@ from datetime import timedelta
 import hypercorn
 from quart import Quart, render_template, request, redirect, url_for, session
 from hypercorn.config import Config
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import SessionPasswordNeededError, ReactionInvalidError
 from telethon.sync import TelegramClient, events
 from telethon.tl import types
 from telethon.tl.functions.messages import SendReactionRequest
@@ -198,14 +198,17 @@ async def select_settings_chat(event):
     chat_id = event.chat.id
     Settings.set_settings_chat_id(chat_id)
 
-    # React to the command first
-    await client(SendReactionRequest(
-        peer=event.input_chat,
-        msg_id=event.message.id,
-        reaction=[types.ReactionEmoji(
-            emoticon=u'\u2705'  # ✅
-        )]
-    ))
+    # React to the command (may fail if reaction not allowed in this chat)
+    try:
+        await client(SendReactionRequest(
+            peer=event.input_chat,
+            msg_id=event.message.id,
+            reaction=[types.ReactionEmoji(
+                emoticon=u'\u2705'  # ✅
+            )]
+        ))
+    except ReactionInvalidError:
+        print(f"[DEBUG] Reaction not allowed in chat {event.chat_id}, skipping")
 
     await client.send_message(
         entity=event.input_chat,
@@ -223,14 +226,17 @@ async def disable_autoreply(event):
 
     Settings.set_settings_chat_id(None)
 
-    # React to the command first
-    await client(SendReactionRequest(
-        peer=event.input_chat,
-        msg_id=event.message.id,
-        reaction=[types.ReactionEmoji(
-            emoticon=u'\u274c'  # ❌
-        )]
-    ))
+    # React to the command (may fail if reaction not allowed in this chat)
+    try:
+        await client(SendReactionRequest(
+            peer=event.input_chat,
+            msg_id=event.message.id,
+            reaction=[types.ReactionEmoji(
+                emoticon=u'\u274c'  # ❌
+            )]
+        ))
+    except ReactionInvalidError:
+        print(f"[DEBUG] Reaction not allowed in chat {event.chat_id}, skipping")
 
     await client.send_message(
         entity=event.input_chat,
@@ -272,13 +278,16 @@ async def setup_response(event):
     emoji = custom_emojis[0]
     Reply.create(emoji.document_id, message)
 
-    await client(SendReactionRequest(
-        peer=event.input_chat,
-        msg_id=event.message.id,
-        reaction=[types.ReactionEmoji(
-            emoticon=u'\U0001fae1'
-        )]
-    ))
+    try:
+        await client(SendReactionRequest(
+            peer=event.input_chat,
+            msg_id=event.message.id,
+            reaction=[types.ReactionEmoji(
+                emoticon=u'\U0001fae1'
+            )]
+        ))
+    except ReactionInvalidError:
+        print(f"[DEBUG] Reaction not allowed in chat {event.chat_id}, skipping")
 
 
 @client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
@@ -311,13 +320,16 @@ async def asap_handler(event):
         except Exception as e:
             print(f"[ASAP WEBHOOK ERROR] Failed to call webhook: {e}")
 
-    await client(SendReactionRequest(
-        peer=event.input_chat,
-        msg_id=event.message.id,
-        reaction=[types.ReactionEmoji(
-            emoticon=u'\U0001fae1'
-        )]
-    ))
+    try:
+        await client(SendReactionRequest(
+            peer=event.input_chat,
+            msg_id=event.message.id,
+            reaction=[types.ReactionEmoji(
+                emoticon=u'\U0001fae1'
+            )]
+        ))
+    except ReactionInvalidError:
+        print(f"[DEBUG] Reaction not allowed in chat {event.chat_id}, skipping")
 
 
 @client.on(events.NewMessage(incoming=True))
