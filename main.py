@@ -200,7 +200,7 @@ async def select_settings_chat(event):
 
     # React to the command first
     await client(SendReactionRequest(
-        peer=chat_id,
+        peer=event.input_chat,
         msg_id=event.message.id,
         reaction=[types.ReactionEmoji(
             emoticon=u'\u2705'  # ✅
@@ -208,7 +208,7 @@ async def select_settings_chat(event):
     ))
 
     await client.send_message(
-        entity=chat_id,
+        entity=event.input_chat,
         message="✅ Этот чат выбран для настройки автоответчика.\n\nДоступные команды:\n• /set_for <эмодзи> — ответом на сообщение, чтобы задать автоответ для этого статуса\n• /autoreply-off — отключить автоответчик"
     )
 
@@ -225,7 +225,7 @@ async def disable_autoreply(event):
 
     # React to the command first
     await client(SendReactionRequest(
-        peer=chat_id,
+        peer=event.input_chat,
         msg_id=event.message.id,
         reaction=[types.ReactionEmoji(
             emoticon=u'\u274c'  # ❌
@@ -233,7 +233,7 @@ async def disable_autoreply(event):
     ))
 
     await client.send_message(
-        entity=chat_id,
+        entity=event.input_chat,
         message="❌ Автоответчик отключен. Используйте /autoreply-settings в любом чате, чтобы снова включить."
     )
 
@@ -249,13 +249,13 @@ async def setup_response(event):
 
     if not event.reply_to:
         await client.send_message(
-            entity=chat_id,
+            entity=event.input_chat,
             message="Команда должна быть ответом на сообщение"
         )
         return
 
     msg_id = event.reply_to.reply_to_msg_id
-    message = await client.get_messages(chat_id, ids=msg_id)
+    message = await client.get_messages(event.input_chat, ids=msg_id)
 
     entities = event.message.entities or []
     # Filter only custom emojis (premium Telegram emojis with document_id)
@@ -263,7 +263,7 @@ async def setup_response(event):
 
     if len(custom_emojis) != 1:
         await client.send_message(
-            entity=chat_id,
+            entity=event.input_chat,
             reply_to=msg_id,
             message=f"Нужен 1 кастомный эмодзи Telegram (премиум), найдено: {len(custom_emojis)}. Обычные эмодзи (🎄) не поддерживаются — используйте эмодзи из панели премиум-стикеров."
         )
@@ -273,7 +273,7 @@ async def setup_response(event):
     Reply.create(emoji.document_id, message)
 
     await client(SendReactionRequest(
-        peer=chat_id,
+        peer=event.input_chat,
         msg_id=event.message.id,
         reaction=[types.ReactionEmoji(
             emoticon=u'\U0001fae1'
@@ -312,7 +312,7 @@ async def asap_handler(event):
             print(f"[ASAP WEBHOOK ERROR] Failed to call webhook: {e}")
 
     await client(SendReactionRequest(
-        peer=event.peer_id,
+        peer=event.input_chat,
         msg_id=event.message.id,
         reaction=[types.ReactionEmoji(
             emoticon=u'\U0001fae1'
