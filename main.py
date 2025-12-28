@@ -263,10 +263,6 @@ async def setup_response(event):
 
 @client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
 async def asap_handler(event):
-    # Only work if settings chat is selected (autoreply is enabled)
-    if Settings.get_settings_chat_id() is None:
-        return
-
     if not event.is_private:
         return
 
@@ -306,10 +302,6 @@ async def asap_handler(event):
 
 @client.on(events.NewMessage(incoming=True))
 async def new_messages(event):
-    # Only work if settings chat is selected (autoreply is enabled)
-    if Settings.get_settings_chat_id() is None:
-        return
-
     if not event.is_private:
         return
 

@@ -74,14 +74,12 @@ Main Telethon event handlers in main.py:
    - Must be a reply to the message to use as auto-reply template
 
 4. **ASAP handler**: Detects urgent messages containing "asap" (case-insensitive)
-   - Only works when settings chat is selected (autoreply enabled)
    - Only processes private messages
    - Checks if user is available (emoji status != available_emoji_id)
    - Forwards urgent notification to personal account
    - Calls webhook if `ASAP_WEBHOOK_URL` is configured
 
 5. **Auto-reply handler**: Sends pre-configured responses
-   - Only works when settings chat is selected (autoreply enabled)
    - Only processes private messages
    - Looks up message template based on current emoji status
    - Rate limits: Only sends if 15+ minutes since last message to that user
