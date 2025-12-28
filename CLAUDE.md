@@ -73,13 +73,18 @@ Main Telethon event handlers in main.py:
    - Expects exactly one custom emoji entity in the message
    - Must be a reply to the message to use as auto-reply template
 
-4. **ASAP handler**: Detects urgent messages containing "asap" (case-insensitive)
+4. **setup_response_current_status**: Triggered by `/set` command (outgoing, only in settings chat)
+   - Creates/updates emoji-to-message mapping for the current account emoji status
+   - Uses the user's current emoji status instead of requiring an emoji in the command
+   - Must be a reply to the message to use as auto-reply template
+
+5. **ASAP handler**: Detects urgent messages containing "asap" (case-insensitive)
    - Only processes private messages
    - Checks if user is available (emoji status != available_emoji_id)
    - Forwards urgent notification to personal account
    - Calls webhook if `ASAP_WEBHOOK_URL` is configured
 
-5. **Auto-reply handler**: Sends pre-configured responses
+6. **Auto-reply handler**: Sends pre-configured responses
    - Only processes private messages
    - Looks up message template based on current emoji status
    - Rate limits: Only sends if 15+ minutes since last message to that user

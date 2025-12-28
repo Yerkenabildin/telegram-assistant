@@ -212,7 +212,7 @@ async def select_settings_chat(event):
 
     await client.send_message(
         entity=event.input_chat,
-        message="✅ Этот чат выбран для настройки автоответчика.\n\nДоступные команды:\n• /set_for <эмодзи> — ответом на сообщение, чтобы задать автоответ для этого статуса\n• /autoreply-off — отключить автоответчик"
+        message="✅ Этот чат выбран для настройки автоответчика.\n\nДоступные команды:\n• /set — ответом на сообщение, чтобы задать автоответ для текущего статуса\n• /set_for <эмодзи> — ответом на сообщение, чтобы задать автоответ для указанного эмодзи\n• /autoreply-off — отключить автоответчик"
     )
 
 
@@ -288,6 +288,55 @@ async def setup_response(event):
         ))
     except ReactionInvalidError:
         print(f"[DEBUG] Reaction not allowed in chat {event.chat_id}, skipping")
+
+
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/set\s*$"))
+async def setup_response_current_status(event):
+    """Set auto-reply message for the current emoji status"""
+    settings_chat_id = Settings.get_settings_chat_id()
+    chat_id = event.chat.id
+
+    # Only work in selected settings chat
+    if settings_chat_id is None or settings_chat_id != chat_id:
+        return
+
+    if not event.reply_to:
+        await client.send_message(
+            entity=event.input_chat,
+            message="Команда должна быть ответом на сообщение"
+        )
+        return
+
+    # Get current emoji status
+    me = await client.get_me()
+    if not me.emoji_status:
+        await client.send_message(
+            entity=event.input_chat,
+            message="❌ У вас не установлен эмодзи-статус. Установите статус в настройках Telegram и попробуйте снова."
+        )
+        return
+
+    msg_id = event.reply_to.reply_to_msg_id
+    message = await client.get_messages(event.input_chat, ids=msg_id)
+
+    emoji_id = me.emoji_status.document_id
+    Reply.create(emoji_id, message)
+
+    try:
+        await client(SendReactionRequest(
+            peer=event.input_chat,
+            msg_id=event.message.id,
+            reaction=[types.ReactionEmoji(
+                emoticon=u'\U0001fae1'
+            )]
+        ))
+    except ReactionInvalidError:
+        print(f"[DEBUG] Reaction not allowed in chat {event.chat_id}, skipping")
+
+    await client.send_message(
+        entity=event.input_chat,
+        message=f"✅ Автоответ установлен для текущего статуса (ID: {emoji_id})"
+    )
 
 
 @client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
