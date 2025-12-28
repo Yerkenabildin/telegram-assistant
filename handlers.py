@@ -11,7 +11,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule, parse_days, parse_time_range, DAY_DISPLAY
+from models import Reply, Settings, Schedule, parse_days, parse_time_range, parse_date_range, DAY_DISPLAY
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 
@@ -467,6 +467,62 @@ def register_handlers(client):
             message=f"✅ Правило #{schedule.id} добавлено: {days_display} {time_start}-{time_end}"
         )
 
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^/schedule\s+override\s+(\S+)\s+.*"))
+    async def schedule_override(event):
+        """Add override rule for vacation/sick leave."""
+        settings_chat_id = Settings.get_settings_chat_id()
+        if settings_chat_id != event.chat.id:
+            return
+
+        # Parse command arguments
+        text = event.message.text
+        parts = text.split(maxsplit=2)  # /schedule override DATES EMOJI
+
+        if len(parts) < 3:
+            await client.send_message(
+                entity=event.input_chat,
+                message="❌ Формат: `/schedule override <даты> <эмодзи>`\nПример: `/schedule override 25.12-05.01 🏝️`"
+            )
+            return
+
+        date_str = parts[2].split()[0]  # Get dates before emoji
+
+        date_start, date_end = parse_date_range(date_str)
+        if date_start is None or date_end is None:
+            await client.send_message(
+                entity=event.input_chat,
+                message=f"❌ Не могу разобрать даты: `{date_str}`\nПримеры: `25.12-05.01`, `25.12.2024-05.01.2025`"
+            )
+            return
+
+        entities = event.message.entities or []
+        custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+        if len(custom_emojis) != 1:
+            await client.send_message(
+                entity=event.input_chat,
+                message="❌ Нужен 1 кастомный эмодзи. Используйте премиум-эмодзи из панели стикеров."
+            )
+            return
+
+        emoji_id = custom_emojis[0].document_id
+
+        schedule = Schedule.create_override(
+            emoji_id=emoji_id,
+            date_start=date_start,
+            date_end=date_end,
+            name="Перекрытие"
+        )
+        Schedule.set_scheduling_enabled(True)
+        logger.info(f"Override #{schedule.id} created for emoji {emoji_id}: {date_start} - {date_end}")
+
+        await _send_reaction(client, event, '\u2705')
+
+        await client.send_message(
+            entity=event.input_chat,
+            message=f"✅ Перекрытие #{schedule.id} добавлено: {date_start} — {date_end}\n⚠️ Это правило имеет максимальный приоритет!"
+        )
+
     @client.on(events.NewMessage(outgoing=True, pattern=r"^/schedule\s+list\s*$"))
     async def schedule_list(event):
         """List all schedule rules."""
@@ -487,8 +543,22 @@ def register_handlers(client):
         status = "✅ включено" if is_enabled else "❌ выключено"
         lines = [f"📅 **Расписание эмодзи** ({status})\n"]
 
-        for s in schedules:
-            lines.append(f"• `#{s.id}` {s.get_days_display()} {s.time_start}-{s.time_end} (приоритет: {s.priority})")
+        # Separate overrides and regular rules
+        overrides = [s for s in schedules if s.is_override()]
+        regular = [s for s in schedules if not s.is_override()]
+
+        if overrides:
+            lines.append("**🔴 Перекрытия (макс. приоритет):**")
+            for s in overrides:
+                date_info = s.get_date_display()
+                expired = " ⚠️ истекло" if s.is_expired() else ""
+                lines.append(f"• `#{s.id}` {date_info}{expired}")
+            lines.append("")
+
+        if regular:
+            lines.append("**📋 Обычные правила:**")
+            for s in regular:
+                lines.append(f"• `#{s.id}` {s.get_days_display()} {s.time_start}-{s.time_end} (пр: {s.priority})")
 
         # Show what's currently active
         current_emoji_id = Schedule.get_current_emoji_id()

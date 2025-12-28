@@ -101,12 +101,21 @@ async def schedule_checker():
 
     logger.info("Schedule checker active")
 
+    check_count = 0
+
     while True:
         try:
             await asyncio.sleep(60)  # Check every minute
+            check_count += 1
 
             if not Schedule.is_scheduling_enabled():
                 continue
+
+            # Clean up expired overrides every hour
+            if check_count % 60 == 0:
+                deleted = Schedule.delete_expired()
+                if deleted > 0:
+                    logger.info(f"Deleted {deleted} expired override(s)")
 
             scheduled_emoji_id = Schedule.get_current_emoji_id()
             if scheduled_emoji_id is None:

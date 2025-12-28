@@ -27,6 +27,12 @@ DAY_NAMES = {
 
 DAY_DISPLAY = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
 
+# Priority levels
+PRIORITY_REST = 1        # Fallback/rest rules
+PRIORITY_CUSTOM = 5      # Custom user rules
+PRIORITY_WORK = 10       # Work schedule
+PRIORITY_OVERRIDE = 100  # Override rules (vacation, sick leave, etc.)
+
 
 class Reply(Model):
     """
@@ -200,10 +206,12 @@ class Schedule(Model):
             {'name': 'time_end', 'type': 'TEXT'},       # "18:00"
             {'name': 'priority', 'type': 'INTEGER'},    # Higher priority wins in conflicts
             {'name': 'name', 'type': 'TEXT'},           # Human-readable rule name
+            {'name': 'date_start', 'type': 'TEXT'},     # "2024-01-15" - optional start date
+            {'name': 'date_end', 'type': 'TEXT'},       # "2024-01-20" - optional end date
         ]
 
     @staticmethod
-    def create(emoji_id, days, time_start, time_end, priority=0, name=""):
+    def create(emoji_id, days, time_start, time_end, priority=0, name="", date_start=None, date_end=None):
         """Create a new schedule rule"""
         schedule = Schedule()
         schedule.emoji_id = str(emoji_id)
@@ -212,13 +220,45 @@ class Schedule(Model):
         schedule.time_end = time_end
         schedule.priority = priority
         schedule.name = name
+        schedule.date_start = date_start
+        schedule.date_end = date_end
         schedule.save()
         return schedule
+
+    @staticmethod
+    def create_override(emoji_id, date_start, date_end, name="Перекрытие"):
+        """Create an override rule that applies 24/7 within date range"""
+        return Schedule.create(
+            emoji_id=emoji_id,
+            days=[0, 1, 2, 3, 4, 5, 6],  # Every day
+            time_start="00:00",
+            time_end="23:59",
+            priority=PRIORITY_OVERRIDE,
+            name=name,
+            date_start=date_start,
+            date_end=date_end
+        )
 
     @staticmethod
     def get_all():
         """Get all schedule rules ordered by priority"""
         return Schedule().select(SQL().ORDER_BY('priority', 'DESC')) or []
+
+    @staticmethod
+    def get_overrides():
+        """Get all override rules (rules with date ranges)"""
+        all_rules = Schedule.get_all()
+        return [r for r in all_rules if r.is_override()]
+
+    @staticmethod
+    def delete_expired():
+        """Delete all expired override rules"""
+        deleted = 0
+        for schedule in Schedule.get_overrides():
+            if schedule.is_expired():
+                schedule.delete()
+                deleted += 1
+        return deleted
 
     @staticmethod
     def delete_all():
@@ -252,10 +292,43 @@ class Schedule(Model):
             return "СБ-ВС"
         return ', '.join(DAY_DISPLAY[d] for d in days)
 
+    def is_override(self):
+        """Check if this is an override rule (has date range)"""
+        return self.date_start is not None or self.date_end is not None
+
+    def get_date_display(self):
+        """Get date range as human-readable string"""
+        if not self.is_override():
+            return None
+        if self.date_start and self.date_end:
+            return f"{self.date_start} — {self.date_end}"
+        elif self.date_start:
+            return f"с {self.date_start}"
+        elif self.date_end:
+            return f"до {self.date_end}"
+        return None
+
+    def is_expired(self, now=None):
+        """Check if this override rule has expired"""
+        if not self.date_end:
+            return False
+        if now is None:
+            now = datetime.now()
+        current_date = now.strftime('%Y-%m-%d')
+        return current_date > self.date_end
+
     def matches_now(self, now=None):
         """Check if this schedule rule matches current time"""
         if now is None:
             now = datetime.now()
+
+        current_date = now.strftime('%Y-%m-%d')
+
+        # Check date range if specified
+        if self.date_start and current_date < self.date_start:
+            return False
+        if self.date_end and current_date > self.date_end:
+            return False
 
         current_day = now.weekday()  # 0=Monday, 6=Sunday
         current_time = now.strftime('%H:%M')
@@ -367,3 +440,47 @@ def parse_time_range(range_str):
     end = parse_time(parts[1])
 
     return start, end
+
+
+def parse_date(date_str):
+    """Parse date string like '25.12', '25.12.2024', or '2024-12-25'"""
+    date_str = date_str.strip()
+
+    # Try different formats
+    formats = [
+        ('%d.%m.%Y', True),   # 25.12.2024
+        ('%d.%m', False),      # 25.12 (current year)
+        ('%Y-%m-%d', True),   # 2024-12-25
+        ('%d/%m/%Y', True),   # 25/12/2024
+        ('%d/%m', False),      # 25/12 (current year)
+    ]
+
+    for fmt, has_year in formats:
+        try:
+            parsed = datetime.strptime(date_str, fmt)
+            if not has_year:
+                # Use current year, or next year if date is in the past
+                today = date.today()
+                parsed = parsed.replace(year=today.year)
+                if parsed.date() < today:
+                    parsed = parsed.replace(year=today.year + 1)
+            return parsed.strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+
+    return None
+
+
+def parse_date_range(range_str):
+    """Parse date range like '25.12-30.12' or '25.12.2024-05.01.2025'"""
+    # Try to split by various separators
+    for sep in [' - ', ' — ', '-', '—']:
+        if sep in range_str:
+            parts = range_str.split(sep)
+            if len(parts) == 2:
+                start = parse_date(parts[0].strip())
+                end = parse_date(parts[1].strip())
+                if start and end:
+                    return start, end
+
+    return None, None
