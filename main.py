@@ -16,7 +16,7 @@ from telethon.tl.functions.messages import SendReactionRequest
 from telethon.tl.functions.auth import ResendCodeRequest
 from telethon.tl.types import MessageEntityCustomEmoji
 
-from models import Reply
+from models import Reply, Settings
 
 app = Quart(__name__)
 
@@ -42,7 +42,6 @@ api_id = int(environ.get('API_ID'))
 available_emoji_id = int(environ.get('AVAILABLE_EMOJI_ID', 5810051751654460532))
 api_hash = environ.get('API_HASH')
 personal_tg_login = environ.get('PERSONAL_TG_LOGIN')
-work_tg_login = environ.get('WORK_TG_LOGIN')
 asap_webhook_url = environ.get('ASAP_WEBHOOK_URL')
 
 client = TelegramClient("./storage/session", api_id, api_hash)
@@ -52,6 +51,8 @@ client = TelegramClient("./storage/session", api_id, api_hash)
 async def startup():
     reply = Reply()
     reply.createTable()
+    settings = Settings()
+    settings.createTable()
 
 
 @app.after_serving
@@ -185,9 +186,46 @@ async def two_factor():
         return await render_template('2fa.html', error_text=str(err))
 
 
-@client.on(events.NewMessage(from_users=work_tg_login, pattern="/set_for.*"))
-async def setup_response(event):
+@client.on(events.NewMessage(outgoing=True, pattern="/autoreply-settings"))
+async def select_settings_chat(event):
     chat_id = event.chat.id
+    Settings.set_settings_chat_id(chat_id)
+
+    await client.send_message(
+        entity=chat_id,
+        message="✅ Этот чат выбран для настройки автоответчика.\n\nДоступные команды:\n• /set_for <эмодзи> — ответом на сообщение, чтобы задать автоответ для этого статуса\n• /autoreply-off — отключить автоответчик"
+    )
+
+    # Delete the command message
+    await event.delete()
+
+
+@client.on(events.NewMessage(outgoing=True, pattern="/autoreply-off"))
+async def disable_autoreply(event):
+    settings_chat_id = Settings.get_settings_chat_id()
+    chat_id = event.chat.id
+
+    if settings_chat_id != chat_id:
+        return
+
+    Settings.set_settings_chat_id(None)
+
+    await client.send_message(
+        entity=chat_id,
+        message="❌ Автоответчик отключен. Используйте /autoreply-settings в любом чате, чтобы снова включить."
+    )
+
+    await event.delete()
+
+
+@client.on(events.NewMessage(outgoing=True, pattern="/set_for.*"))
+async def setup_response(event):
+    settings_chat_id = Settings.get_settings_chat_id()
+    chat_id = event.chat.id
+
+    # Only work in selected settings chat
+    if settings_chat_id is None or settings_chat_id != chat_id:
+        return
 
     if not event.reply_to:
         await client.send_message(
@@ -229,7 +267,7 @@ async def asap_handler(event):
         return
 
     me = await client.get_me()
-    if me.emoji_status.document_id == available_emoji_id:
+    if not me.emoji_status or me.emoji_status.document_id == available_emoji_id:
         return
 
     sender = await event.get_sender()
@@ -268,6 +306,9 @@ async def new_messages(event):
         return
 
     me = await client.get_me()
+
+    if not me.emoji_status:
+        return
 
     reply = Reply.get_by_emoji(me.emoji_status.document_id)
     if reply is None:
