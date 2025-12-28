@@ -29,6 +29,11 @@ class Config:
         default_factory=lambda: os.environ.get('ASAP_WEBHOOK_URL') or None
     )
 
+    # Webhook HTTP method (POST or GET)
+    asap_webhook_method: str = field(
+        default_factory=lambda: os.environ.get('ASAP_WEBHOOK_METHOD', 'POST').upper()
+    )
+
     # Web server settings
     host: str = field(default_factory=lambda: os.environ.get('HOST', '0.0.0.0'))
     port: int = field(default_factory=lambda: int(os.environ.get('PORT', 5050)))

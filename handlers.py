@@ -21,7 +21,8 @@ _notification_service = NotificationService(
     personal_tg_login=config.personal_tg_login,
     available_emoji_id=config.available_emoji_id,
     webhook_url=config.asap_webhook_url,
-    webhook_timeout=config.webhook_timeout_seconds
+    webhook_timeout=config.webhook_timeout_seconds,
+    webhook_method=config.asap_webhook_method
 )
 
 
@@ -240,8 +241,16 @@ def register_handlers(client):
 async def _send_reaction(client, event, emoticon: str) -> None:
     """Send a reaction to a message, handling errors gracefully."""
     try:
+        # Use get_input_chat() for incoming messages where input_chat may be None
+        input_chat = event.input_chat
+        if input_chat is None:
+            input_chat = await event.get_input_chat()
+        if input_chat is None:
+            logger.debug(f"Cannot get input_chat for reaction in chat {event.chat_id}")
+            return
+
         await client(SendReactionRequest(
-            peer=event.input_chat,
+            peer=input_chat,
             msg_id=event.message.id,
             reaction=[types.ReactionEmoji(emoticon=emoticon)]
         ))
