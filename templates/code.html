@@ -26,7 +26,7 @@
 
 <form method="POST" action="{{ url_for('code') }}">
     <label for="code">Введите код:</label><br>
-    <input type="text" id="code" name="code" value="" required maxlength="{{ code_length }}" pattern="\d+" inputmode="numeric"><br><br>
+    <input type="text" id="code" name="code" value="" required maxlength="{{ code_length }}" pattern="[0-9]+" inputmode="numeric"><br><br>
     <input type="submit" value="Отправить"><br>
 
     {% if error_text %}
@@ -40,6 +40,12 @@
     <p style="color: gray;">Код не пришёл?</p>
     <input type="submit" value="📲 Отправить код повторно"><br>
     <small>Telegram попробует другой способ доставки (SMS/звонок)</small>
+</form>
+
+<hr>
+
+<form method="POST" action="{{ url_for('clear_session') }}">
+    <input type="submit" value="← Ввести другой номер">
 </form>
 
 </body>

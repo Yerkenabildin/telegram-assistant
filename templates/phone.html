@@ -18,5 +18,12 @@
     {% endif %}
 </form>
 
+<hr>
+
+<form method="POST" action="{{ url_for('clear_session') }}">
+    <p style="color: gray;">Проблемы с авторизацией?</p>
+    <input type="submit" value="🔄 Очистить сессию">
+</form>
+
 </body>
 </html>

@@ -116,6 +116,13 @@ async def code():
         return await render_template('code.html', error_text=str(err))
 
 
+@app.route("/clear-session", methods=["POST"])
+async def clear_session():
+    """Clear session and redirect to phone input"""
+    session.clear()
+    return redirect(url_for('login'))
+
+
 @app.route("/resend", methods=["POST"])
 async def resend_code():
     phone = session.get('phone')
