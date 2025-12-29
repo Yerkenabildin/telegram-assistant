@@ -113,6 +113,7 @@ docker logs -f telegram-assistant
 | `ASAP_WEBHOOK_URL` | NO | - | Webhook URL for urgent message notifications |
 | `SECRET_KEY` | NO | `os.urandom(24)` | Session encryption key |
 | `SCRIPT_NAME` | NO | - | Reverse proxy path prefix |
+| `TIMEZONE` | NO | `Europe/Moscow` | Timezone for schedule (e.g., `Europe/Moscow`, `UTC`) |
 
 ## Event Handlers
 
@@ -140,8 +141,8 @@ Main Telethon event handlers in `main.py`:
 
 7. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
    - `/schedule` - Show help for schedule commands
-   - `/schedule work <emoji>` - Set work hours (Mon-Fri 09:00-18:00, priority 10)
-   - `/schedule weekends <emoji>` - Set weekends (Fri 18:00 - Sun 23:59, priority 8)
+   - `/schedule work <emoji>` - Set work hours (Mon-Fri 12:00-20:00, priority 10)
+   - `/schedule weekends <emoji>` - Set weekends (Fri 20:00 - Sun 23:59, priority 8)
    - `/schedule rest <emoji>` - Set rest time (all other time, priority 1)
    - `/schedule add <days> <time> <emoji>` - Add custom rule (priority 5)
    - `/schedule override <dates> <emoji>` - Add temporary override (priority 100, e.g., vacation)
