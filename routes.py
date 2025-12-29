@@ -3,11 +3,15 @@ Web routes for Telegram authentication.
 
 Handles the authentication flow via web UI.
 """
-from quart import Blueprint, render_template, request, redirect, url_for, session
+from quart import Blueprint, render_template, request, redirect, url_for, session, jsonify
 from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.auth import ResendCodeRequest
+from telethon.tl.functions.account import UpdateEmojiStatusRequest
+from telethon.tl.types import EmojiStatus
 
 from logging_config import logger
+from models import Schedule
+from config import config
 
 # Create blueprint for auth routes
 auth_bp = Blueprint('auth', __name__)
@@ -152,3 +156,94 @@ async def two_factor():
     except Exception as err:
         logger.error(f"2FA failed: {err}")
         return await render_template('2fa.html', error_text=str(err))
+
+
+@auth_bp.route("/api/meeting", methods=["POST"])
+async def meeting():
+    """
+    API endpoint for meeting status control (e.g., Zoom integration).
+
+    Query parameters:
+        action: 'start' or 'end'
+        emoji_id: (required for start) emoji document ID to set during meeting
+        token: (optional) API token for authentication
+
+    Examples:
+        POST /api/meeting?action=start&emoji_id=5368324170671202286
+        POST /api/meeting?action=end
+    """
+    # Check token if configured
+    if config.meeting_api_token:
+        token = request.args.get('token') or request.headers.get('X-API-Token')
+        if token != config.meeting_api_token:
+            return jsonify({"error": "Invalid or missing API token"}), 401
+
+    action = request.args.get('action')
+
+    if action not in ('start', 'end'):
+        return jsonify({"error": "Invalid action. Use 'start' or 'end'"}), 400
+
+    if action == 'start':
+        emoji_id = request.args.get('emoji_id')
+        if not emoji_id:
+            return jsonify({"error": "emoji_id is required for start action"}), 400
+
+        try:
+            emoji_id = int(emoji_id)
+        except ValueError:
+            return jsonify({"error": "emoji_id must be a number"}), 400
+
+        # Create meeting schedule rule
+        Schedule.start_meeting(emoji_id)
+        logger.info(f"Meeting started with emoji_id: {emoji_id}")
+
+        # Immediately update emoji status
+        try:
+            await _client(UpdateEmojiStatusRequest(
+                emoji_status=EmojiStatus(document_id=emoji_id)
+            ))
+            logger.info(f"Emoji status updated to {emoji_id}")
+        except Exception as e:
+            logger.error(f"Failed to update emoji status: {e}")
+            return jsonify({
+                "status": "partial",
+                "message": "Meeting rule created but failed to update emoji immediately",
+                "error": str(e)
+            }), 500
+
+        return jsonify({
+            "status": "ok",
+            "action": "start",
+            "emoji_id": emoji_id,
+            "message": "Meeting started, emoji status updated"
+        })
+
+    else:  # action == 'end'
+        was_active = Schedule.end_meeting()
+
+        if was_active:
+            logger.info("Meeting ended, rule removed")
+
+            # Get scheduled emoji and apply it immediately
+            scheduled_emoji_id = Schedule.get_current_emoji_id()
+            if scheduled_emoji_id:
+                try:
+                    await _client(UpdateEmojiStatusRequest(
+                        emoji_status=EmojiStatus(document_id=scheduled_emoji_id)
+                    ))
+                    logger.info(f"Emoji status restored to scheduled: {scheduled_emoji_id}")
+                except Exception as e:
+                    logger.error(f"Failed to restore emoji status: {e}")
+
+            return jsonify({
+                "status": "ok",
+                "action": "end",
+                "message": "Meeting ended, emoji status restored",
+                "scheduled_emoji_id": scheduled_emoji_id
+            })
+        else:
+            return jsonify({
+                "status": "ok",
+                "action": "end",
+                "message": "No active meeting found"
+            })

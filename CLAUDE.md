@@ -114,6 +114,7 @@ docker logs -f telegram-assistant
 | `SECRET_KEY` | NO | `os.urandom(24)` | Session encryption key |
 | `SCRIPT_NAME` | NO | - | Reverse proxy path prefix |
 | `TIMEZONE` | NO | `Europe/Moscow` | Timezone for schedule (e.g., `Europe/Moscow`, `UTC`) |
+| `MEETING_API_TOKEN` | NO | - | API token for `/api/meeting` endpoint (if not set, no auth required) |
 
 ## Event Handlers
 
@@ -138,6 +139,26 @@ Main Telethon event handlers in `main.py`:
 | `/code` | GET/POST | Verification code input |
 | `/resend` | POST | Request code re-delivery |
 | `/2fa` | GET/POST | Two-factor authentication password |
+| `/api/meeting` | POST | Meeting status control (Zoom integration) |
+
+### Meeting API
+
+Control emoji status during meetings (e.g., Zoom calls):
+
+```bash
+# Start meeting - set "in call" emoji
+curl -X POST "http://localhost:5050/api/meeting?action=start&emoji_id=5368324170671202286"
+
+# End meeting - restore scheduled emoji
+curl -X POST "http://localhost:5050/api/meeting?action=end"
+
+# With authentication (if MEETING_API_TOKEN is set)
+curl -X POST "http://localhost:5050/api/meeting?action=start&emoji_id=123&token=your-token"
+# or via header
+curl -X POST -H "X-API-Token: your-token" "http://localhost:5050/api/meeting?action=start&emoji_id=123"
+```
+
+Priority: Meeting (50) is above Work (10) but below Override (100), so vacation status won't be overwritten.
 
 7. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
    - `/schedule` - Show help for schedule commands
