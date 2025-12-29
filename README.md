@@ -82,7 +82,7 @@ Reply to the message you want to use as a template.
 
 - Bot checks your current emoji status
 - If a template is configured for that emoji, it will auto-reply to incoming private messages
-- Rate limit: Only sends once per 15 minutes to each user
+- Rate limit: Only sends once per 30 minutes to each user (since last outgoing message)
 - If your status is set to the "available" emoji, auto-reply is disabled
 
 ### ASAP notifications

@@ -344,7 +344,7 @@ class TestNewMessagesHandlerLogic:
 
     @pytest.mark.asyncio
     async def test_rate_limits_replies(self, mock_telegram_client, mock_reply, mock_message):
-        """Test that handler rate limits replies (15 minute cooldown)."""
+        """Test that handler rate limits replies (30 minute cooldown from last outgoing)."""
         # Create reply template
         mock_reply.create(5379748062124056162, mock_message)
 
@@ -359,22 +359,22 @@ class TestNewMessagesHandlerLogic:
         mock_sender = MagicMock()
         mock_sender.username = "test_sender"
 
-        # Create recent messages (within 15 minutes)
+        # Create recent outgoing message (within 30 minutes)
         now = datetime.now(timezone.utc)
-        msg1 = MagicMock()
-        msg1.date = now
-        msg2 = MagicMock()
-        msg2.date = now - timedelta(minutes=5)  # Only 5 minutes ago
-        mock_telegram_client.get_messages = AsyncMock(return_value=[msg1, msg2])
+        outgoing_msg = MagicMock()
+        outgoing_msg.date = now - timedelta(minutes=10)  # 10 minutes ago
+        outgoing_msg.out = True  # This is an outgoing message
+        mock_telegram_client.get_messages = AsyncMock(return_value=[outgoing_msg])
 
-        # Handler logic
+        # Handler logic - find last outgoing message
         me = await mock_telegram_client.get_me()
         reply = mock_reply.get_by_emoji(me.emoji_status.document_id)
         if reply:
-            messages = await mock_telegram_client.get_messages(mock_sender.username, limit=2)
-            if len(messages) > 1:
-                difference = messages[0].date - messages[1].date
-                if difference < timedelta(minutes=15):
+            messages = await mock_telegram_client.get_messages(mock_sender.username, limit=10)
+            last_outgoing = next((m for m in messages if m.out), None)
+            if last_outgoing:
+                time_diff = now - last_outgoing.date
+                if time_diff < timedelta(minutes=30):
                     return  # Rate limited
 
             await mock_telegram_client.send_message(mock_sender.username, message=reply.message)
@@ -399,29 +399,71 @@ class TestNewMessagesHandlerLogic:
         mock_sender = MagicMock()
         mock_sender.username = "test_sender"
 
-        # Create messages with enough time gap
+        # Create outgoing message older than cooldown (35 minutes ago)
         now = datetime.now(timezone.utc)
-        msg1 = MagicMock()
-        msg1.date = now
-        msg2 = MagicMock()
-        msg2.date = now - timedelta(minutes=20)  # 20 minutes ago
-        mock_telegram_client.get_messages = AsyncMock(return_value=[msg1, msg2])
+        outgoing_msg = MagicMock()
+        outgoing_msg.date = now - timedelta(minutes=35)  # 35 minutes ago
+        outgoing_msg.out = True
+        mock_telegram_client.get_messages = AsyncMock(return_value=[outgoing_msg])
 
-        # Handler logic
+        # Handler logic - find last outgoing message
         me = await mock_telegram_client.get_me()
         reply = mock_reply.get_by_emoji(me.emoji_status.document_id)
         if reply:
-            messages = await mock_telegram_client.get_messages(mock_sender.username, limit=2)
+            messages = await mock_telegram_client.get_messages(mock_sender.username, limit=10)
+            last_outgoing = next((m for m in messages if m.out), None)
             should_send = True
-            if len(messages) > 1:
-                difference = messages[0].date - messages[1].date
-                if difference < timedelta(minutes=15):
+            if last_outgoing:
+                time_diff = now - last_outgoing.date
+                if time_diff < timedelta(minutes=30):
                     should_send = False
 
             if should_send:
                 await mock_telegram_client.send_message(mock_sender.username, message=reply.message)
 
         # Should send reply
+        mock_telegram_client.send_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_sends_reply_when_no_outgoing_messages(self, mock_telegram_client, mock_reply, mock_message):
+        """Test that handler sends reply when there are no previous outgoing messages."""
+        # Create reply template
+        mock_reply.create(5379748062124056162, mock_message)
+
+        mock_user = MagicMock()
+        mock_user.emoji_status = MagicMock()
+        mock_user.emoji_status.document_id = 5379748062124056162
+        mock_telegram_client.get_me = AsyncMock(return_value=mock_user)
+
+        mock_sender = MagicMock()
+        mock_sender.username = "test_sender"
+
+        # Create only incoming messages (no outgoing)
+        now = datetime.now(timezone.utc)
+        incoming_msg1 = MagicMock()
+        incoming_msg1.date = now
+        incoming_msg1.out = False  # Incoming
+        incoming_msg2 = MagicMock()
+        incoming_msg2.date = now - timedelta(seconds=1)  # 1 second ago
+        incoming_msg2.out = False  # Incoming (forwarded message)
+        mock_telegram_client.get_messages = AsyncMock(return_value=[incoming_msg1, incoming_msg2])
+
+        # Handler logic - find last outgoing message
+        me = await mock_telegram_client.get_me()
+        reply = mock_reply.get_by_emoji(me.emoji_status.document_id)
+        if reply:
+            messages = await mock_telegram_client.get_messages(mock_sender.username, limit=10)
+            last_outgoing = next((m for m in messages if m.out), None)
+            should_send = True
+            if last_outgoing:
+                time_diff = now - last_outgoing.date
+                if time_diff < timedelta(minutes=30):
+                    should_send = False
+
+            if should_send:
+                await mock_telegram_client.send_message(mock_sender.username, message=reply.message)
+
+        # Should send reply (no outgoing messages means no rate limit)
         mock_telegram_client.send_message.assert_called_once()
 
 

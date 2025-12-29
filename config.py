@@ -41,7 +41,7 @@ class Config:
 
     # Rate limiting
     autoreply_cooldown_minutes: int = field(
-        default_factory=lambda: int(os.environ.get('AUTOREPLY_COOLDOWN_MINUTES', 15))
+        default_factory=lambda: int(os.environ.get('AUTOREPLY_COOLDOWN_MINUTES', 30))
     )
 
     # Timeouts

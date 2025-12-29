@@ -22,7 +22,7 @@ class TestAutoReplyServiceShouldSendReply:
         emoji_status_id = None
         available_emoji_id = 5810051751654460532
         reply_exists = True
-        last_two_messages = []
+        last_outgoing_message = None
 
         # Service logic
         if emoji_status_id is None:
@@ -37,7 +37,7 @@ class TestAutoReplyServiceShouldSendReply:
         available_emoji_id = 5810051751654460532
         emoji_status_id = available_emoji_id  # Same as available
         reply_exists = True
-        last_two_messages = []
+        last_outgoing_message = None
 
         # Service logic
         if emoji_status_id == available_emoji_id:
@@ -52,7 +52,7 @@ class TestAutoReplyServiceShouldSendReply:
         emoji_status_id = 1234567890
         available_emoji_id = 5810051751654460532
         reply_exists = False
-        last_two_messages = []
+        last_outgoing_message = None
 
         # Service logic
         if not reply_exists:
@@ -67,7 +67,7 @@ class TestAutoReplyServiceShouldSendReply:
         emoji_status_id = 1234567890
         available_emoji_id = 5810051751654460532
         reply_exists = True
-        last_two_messages = []
+        last_outgoing_message = None  # No recent outgoing, rate limit passes
 
         # Service logic - all conditions met
         result = (
@@ -82,50 +82,30 @@ class TestAutoReplyServiceShouldSendReply:
 class TestAutoReplyServiceRateLimiting:
     """Tests for AutoReplyService rate limiting."""
 
-    def test_allows_first_message(self):
-        """Test rate limiting allows first message."""
-        messages = []
+    def test_allows_when_no_outgoing_message(self):
+        """Test rate limiting allows when no outgoing message exists."""
+        last_outgoing = None
 
         # Service logic
-        if len(messages) <= 1:
+        if last_outgoing is None:
             allow = True
         else:
             allow = False
 
         assert allow is True
 
-    def test_allows_single_message(self):
-        """Test rate limiting allows when only one message."""
-        msg = MagicMock()
-        msg.date = datetime.now(timezone.utc)
-        messages = [msg]
-
-        # Service logic
-        if len(messages) <= 1:
-            allow = True
-        else:
-            allow = False
-
-        assert allow is True
-
-    def test_blocks_when_within_cooldown(self):
-        """Test rate limiting blocks when within cooldown period."""
+    def test_blocks_when_outgoing_within_cooldown(self):
+        """Test rate limiting blocks when outgoing message within cooldown period."""
         cooldown = timedelta(minutes=15)
         now = datetime.now(timezone.utc)
 
-        msg1 = MagicMock()
-        msg1.date = now
-        msg2 = MagicMock()
-        msg2.date = now - timedelta(minutes=5)  # 5 minutes ago
-        messages = [msg1, msg2]
+        last_outgoing = MagicMock()
+        last_outgoing.date = now - timedelta(minutes=5)  # 5 minutes ago
 
         # Service logic
-        if len(messages) > 1:
-            time_diff = messages[0].date - messages[1].date
-            if time_diff < cooldown:
-                allow = False
-            else:
-                allow = True
+        time_diff = now - last_outgoing.date
+        if time_diff < cooldown:
+            allow = False
         else:
             allow = True
 
@@ -136,21 +116,39 @@ class TestAutoReplyServiceRateLimiting:
         cooldown = timedelta(minutes=15)
         now = datetime.now(timezone.utc)
 
-        msg1 = MagicMock()
-        msg1.date = now
-        msg2 = MagicMock()
-        msg2.date = now - timedelta(minutes=20)  # 20 minutes ago
-        messages = [msg1, msg2]
+        last_outgoing = MagicMock()
+        last_outgoing.date = now - timedelta(minutes=20)  # 20 minutes ago
 
         # Service logic
-        if len(messages) > 1:
-            time_diff = messages[0].date - messages[1].date
+        time_diff = now - last_outgoing.date
+        if time_diff < cooldown:
+            allow = False
+        else:
+            allow = True
+
+        assert allow is True
+
+    def test_allows_when_multiple_forwarded_messages(self):
+        """Test rate limiting allows when receiving multiple forwarded messages.
+
+        This is the key fix: when someone forwards 2 messages quickly,
+        we should still allow auto-reply if we haven't responded recently.
+        """
+        cooldown = timedelta(minutes=15)
+        now = datetime.now(timezone.utc)
+
+        # No outgoing messages (we haven't replied yet)
+        last_outgoing = None
+
+        # Service logic - should allow because no recent outgoing message
+        if last_outgoing is None:
+            allow = True
+        else:
+            time_diff = now - last_outgoing.date
             if time_diff < cooldown:
                 allow = False
             else:
                 allow = True
-        else:
-            allow = True
 
         assert allow is True
 
