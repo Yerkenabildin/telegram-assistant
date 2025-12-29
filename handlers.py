@@ -11,7 +11,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule, parse_date_range
+from models import Reply, Settings, Schedule, parse_date_range, PRIORITY_WORK, PRIORITY_WEEKENDS
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 
@@ -295,7 +295,7 @@ def register_handlers(client):
             days=[0, 1, 2, 3, 4],  # Mon-Fri
             time_start="12:00",
             time_end="20:00",
-            priority=10,
+            priority=PRIORITY_WORK,
             name="Рабочее время"
         )
         Schedule.set_scheduling_enabled(True)
@@ -333,7 +333,7 @@ def register_handlers(client):
             days=[4],  # Friday
             time_start="20:00",
             time_end="23:59",
-            priority=8,
+            priority=PRIORITY_WEEKENDS,
             name="Пятница вечер"
         )
 
@@ -343,7 +343,7 @@ def register_handlers(client):
             days=[5, 6],  # Sat-Sun
             time_start="00:00",
             time_end="23:59",
-            priority=8,
+            priority=PRIORITY_WEEKENDS,
             name="Выходные"
         )
 
