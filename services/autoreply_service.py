@@ -33,7 +33,7 @@ class AutoReplyService:
         emoji_status_id: Optional[int],
         available_emoji_id: int,
         reply_exists: bool,
-        last_two_messages: list[Any]
+        last_outgoing_message: Optional[Any]
     ) -> bool:
         """
         Determine if an auto-reply should be sent.
@@ -42,7 +42,7 @@ class AutoReplyService:
             emoji_status_id: Current user's emoji status ID (None if not set)
             available_emoji_id: Emoji ID that indicates "available" status
             reply_exists: Whether a reply template exists for this emoji
-            last_two_messages: Last two messages in conversation (for rate limiting)
+            last_outgoing_message: Last outgoing message in conversation (for rate limiting)
 
         Returns:
             True if auto-reply should be sent
@@ -63,27 +63,28 @@ class AutoReplyService:
             return False
 
         # Rate limiting check
-        if not self._check_rate_limit(last_two_messages):
+        if not self._check_rate_limit(last_outgoing_message):
             logger.debug("Rate limit not met, skipping auto-reply")
             return False
 
         return True
 
-    def _check_rate_limit(self, messages: list[Any]) -> bool:
+    def _check_rate_limit(self, last_outgoing_message: Optional[Any]) -> bool:
         """
-        Check if enough time has passed since last message.
+        Check if enough time has passed since last outgoing message.
 
         Args:
-            messages: Last two messages in conversation
+            last_outgoing_message: Last outgoing message in conversation
 
         Returns:
-            True if rate limit allows sending
+            True if rate limit allows sending (no recent outgoing message)
         """
-        if len(messages) <= 1:
+        if last_outgoing_message is None:
             return True
 
         try:
-            time_diff = messages[0].date - messages[1].date
+            now = datetime.now(last_outgoing_message.date.tzinfo)
+            time_diff = now - last_outgoing_message.date
             if time_diff < self.cooldown:
                 logger.debug(f"Rate limit: {time_diff} < {self.cooldown}")
                 return False

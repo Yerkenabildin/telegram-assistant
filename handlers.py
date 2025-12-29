@@ -218,18 +218,19 @@ def register_handlers(client):
             logger.warning("Could not identify sender, skipping auto-reply")
             return
 
-        # Get last messages for rate limiting
+        # Get last outgoing message for rate limiting
         try:
-            messages = await client.get_messages(user_identifier, limit=2)
+            messages = await client.get_messages(user_identifier, limit=10)
+            last_outgoing = next((m for m in messages if m.out), None)
         except Exception as e:
             logger.warning(f"Could not get messages for rate limiting: {e}")
-            messages = []
+            last_outgoing = None
 
         if not _autoreply_service.should_send_reply(
             emoji_status_id=emoji_status_id,
             available_emoji_id=config.available_emoji_id,
             reply_exists=reply is not None,
-            last_two_messages=messages
+            last_outgoing_message=last_outgoing
         ):
             return
 
