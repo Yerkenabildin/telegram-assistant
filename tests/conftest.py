@@ -26,7 +26,6 @@ def setup_test_environment():
     os.environ['API_ID'] = '12345'
     os.environ['API_HASH'] = 'test_hash_value'
     os.environ['PERSONAL_TG_LOGIN'] = 'test_user'
-    os.environ['AVAILABLE_EMOJI_ID'] = '5810051751654460532'
     os.environ['SECRET_KEY'] = 'test_secret_key_for_sessions'
 
 
@@ -274,6 +273,6 @@ def sample_emoji_id():
 
 
 @pytest.fixture
-def sample_available_emoji_id():
-    """Sample available emoji ID (disables auto-reply)."""
+def sample_work_emoji_id():
+    """Sample work emoji ID (user is available - no auto-reply/ASAP)."""
     return 5810051751654460532

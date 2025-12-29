@@ -20,7 +20,6 @@ class TestAutoReplyServiceShouldSendReply:
     def test_returns_false_when_no_emoji_status(self):
         """Test returns False when user has no emoji status."""
         emoji_status_id = None
-        available_emoji_id = 5810051751654460532
         reply_exists = True
         last_outgoing_message = None
 
@@ -32,25 +31,42 @@ class TestAutoReplyServiceShouldSendReply:
 
         assert result is False
 
-    def test_returns_false_when_user_available(self):
-        """Test returns False when user is available."""
-        available_emoji_id = 5810051751654460532
-        emoji_status_id = available_emoji_id  # Same as available
+    def test_returns_false_when_user_has_work_emoji(self):
+        """Test returns False when user has work emoji status (is available)."""
+        work_emoji_id = 5810051751654460532  # From schedule
+        emoji_status_id = work_emoji_id  # Same as work emoji
         reply_exists = True
         last_outgoing_message = None
 
-        # Service logic
-        if emoji_status_id == available_emoji_id:
+        # Service logic - user has work emoji, so they're "available"
+        if work_emoji_id is not None and emoji_status_id == work_emoji_id:
             result = False
         else:
             result = True
 
         assert result is False
 
+    def test_returns_true_when_no_work_emoji_configured(self):
+        """Test returns True when no work emoji is configured (always send reply)."""
+        work_emoji_id = None  # No work schedule configured
+        emoji_status_id = 1234567890
+        reply_exists = True
+        last_outgoing_message = None
+
+        # Service logic - no work emoji configured, so proceed
+        if work_emoji_id is not None and emoji_status_id == work_emoji_id:
+            result = False
+        elif not reply_exists:
+            result = False
+        else:
+            result = True
+
+        assert result is True
+
     def test_returns_false_when_no_reply_template(self):
         """Test returns False when no reply template exists."""
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
+        work_emoji_id = 5810051751654460532
         reply_exists = False
         last_outgoing_message = None
 
@@ -65,14 +81,14 @@ class TestAutoReplyServiceShouldSendReply:
     def test_returns_true_when_all_conditions_met(self):
         """Test returns True when all conditions are met."""
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
+        work_emoji_id = 5810051751654460532  # Different from current status
         reply_exists = True
         last_outgoing_message = None  # No recent outgoing, rate limit passes
 
         # Service logic - all conditions met
         result = (
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id) and
             reply_exists
         )
 
@@ -189,7 +205,6 @@ class TestNotificationServiceShouldNotifyAsap:
         message_text = "asap"
         is_private = False
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
 
         # Service logic
         if not is_private:
@@ -204,7 +219,6 @@ class TestNotificationServiceShouldNotifyAsap:
         message_text = "Hello there"
         is_private = True
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
 
         # Service logic
         if 'asap' not in message_text.lower():
@@ -219,7 +233,6 @@ class TestNotificationServiceShouldNotifyAsap:
         message_text = "asap"
         is_private = True
         emoji_status_id = None
-        available_emoji_id = 5810051751654460532
 
         # Service logic
         if emoji_status_id is None:
@@ -229,34 +242,51 @@ class TestNotificationServiceShouldNotifyAsap:
 
         assert result is False
 
-    def test_returns_false_when_user_available(self):
-        """Test returns False when user is available."""
+    def test_returns_false_when_user_has_work_emoji(self):
+        """Test returns False when user has work emoji (is available)."""
         message_text = "asap"
         is_private = True
-        available_emoji_id = 5810051751654460532
-        emoji_status_id = available_emoji_id
+        work_emoji_id = 5810051751654460532  # From schedule
+        emoji_status_id = work_emoji_id
 
-        # Service logic
-        if emoji_status_id == available_emoji_id:
+        # Service logic - user has work emoji, so they're available
+        if work_emoji_id is not None and emoji_status_id == work_emoji_id:
             result = False
         else:
             result = True
 
         assert result is False
 
+    def test_returns_true_when_no_work_emoji_configured(self):
+        """Test returns True when no work emoji configured (ASAP always works)."""
+        message_text = "Please check this ASAP"
+        is_private = True
+        emoji_status_id = 1234567890
+        work_emoji_id = None  # No work schedule configured
+
+        # Service logic - no work emoji = ASAP always works
+        result = (
+            is_private and
+            'asap' in message_text.lower() and
+            emoji_status_id is not None and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id)
+        )
+
+        assert result is True
+
     def test_returns_true_when_all_conditions_met(self):
         """Test returns True when all conditions are met."""
         message_text = "Please check this ASAP"
         is_private = True
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
+        work_emoji_id = 5810051751654460532  # Different from current status
 
         # Service logic
         result = (
             is_private and
             'asap' in message_text.lower() and
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id
+            (work_emoji_id is None or emoji_status_id != work_emoji_id)
         )
 
         assert result is True
@@ -348,7 +378,7 @@ class TestServiceIntegration:
         """Test that autoreply and notification have different conditions."""
         # User is busy (not available), has reply template
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
+        work_emoji_id = 5810051751654460532  # Different from current status
         reply_exists = True
         is_private = True
         message_text = "Hello"  # No ASAP
@@ -356,7 +386,7 @@ class TestServiceIntegration:
         # AutoReply should trigger
         should_autoreply = (
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id) and
             reply_exists and
             is_private
         )
@@ -366,7 +396,7 @@ class TestServiceIntegration:
             is_private and
             'asap' in message_text.lower() and
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id
+            (work_emoji_id is None or emoji_status_id != work_emoji_id)
         )
 
         assert should_autoreply is True
@@ -375,14 +405,14 @@ class TestServiceIntegration:
     def test_both_trigger_for_asap_message(self):
         """Test both services trigger for ASAP message."""
         emoji_status_id = 1234567890
-        available_emoji_id = 5810051751654460532
+        work_emoji_id = 5810051751654460532  # Different from current status
         reply_exists = True
         is_private = True
         message_text = "Check this ASAP!"
 
         should_autoreply = (
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id) and
             reply_exists and
             is_private
         )
@@ -391,23 +421,23 @@ class TestServiceIntegration:
             is_private and
             'asap' in message_text.lower() and
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id
+            (work_emoji_id is None or emoji_status_id != work_emoji_id)
         )
 
         assert should_autoreply is True
         assert should_notify is True
 
     def test_neither_trigger_when_available(self):
-        """Test neither service triggers when user is available."""
-        available_emoji_id = 5810051751654460532
-        emoji_status_id = available_emoji_id  # User is available
+        """Test neither service triggers when user has work emoji (is available)."""
+        work_emoji_id = 5810051751654460532
+        emoji_status_id = work_emoji_id  # User has work emoji = available
         reply_exists = True
         is_private = True
         message_text = "Check this ASAP!"
 
         should_autoreply = (
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id) and
             reply_exists and
             is_private
         )
@@ -416,8 +446,33 @@ class TestServiceIntegration:
             is_private and
             'asap' in message_text.lower() and
             emoji_status_id is not None and
-            emoji_status_id != available_emoji_id
+            (work_emoji_id is None or emoji_status_id != work_emoji_id)
         )
 
         assert should_autoreply is False
         assert should_notify is False
+
+    def test_both_trigger_when_no_work_emoji_configured(self):
+        """Test both services trigger when no work schedule exists."""
+        emoji_status_id = 1234567890
+        work_emoji_id = None  # No work schedule configured
+        reply_exists = True
+        is_private = True
+        message_text = "Check this ASAP!"
+
+        should_autoreply = (
+            emoji_status_id is not None and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id) and
+            reply_exists and
+            is_private
+        )
+
+        should_notify = (
+            is_private and
+            'asap' in message_text.lower() and
+            emoji_status_id is not None and
+            (work_emoji_id is None or emoji_status_id != work_emoji_id)
+        )
+
+        assert should_autoreply is True
+        assert should_notify is True

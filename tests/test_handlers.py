@@ -234,20 +234,21 @@ class TestAsapHandlerLogic:
         mock_telegram_client.send_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_ignores_when_available(self, mock_telegram_client, sample_available_emoji_id):
-        """Test that handler ignores when user is available."""
+    async def test_ignores_when_has_work_emoji(self, mock_telegram_client, sample_work_emoji_id):
+        """Test that handler ignores when user has work emoji (is available)."""
         event = MagicMock()
         event.is_private = True
 
         mock_user = MagicMock()
         mock_user.emoji_status = MagicMock()
-        mock_user.emoji_status.document_id = sample_available_emoji_id  # Available
+        mock_user.emoji_status.document_id = sample_work_emoji_id  # Work emoji = available
         mock_telegram_client.get_me = AsyncMock(return_value=mock_user)
 
-        # Handler logic
+        # Handler logic - if work_emoji is configured and matches current status
+        work_emoji_id = sample_work_emoji_id  # Simulating Schedule.get_work_emoji_id()
         me = await mock_telegram_client.get_me()
-        if not me.emoji_status or me.emoji_status.document_id == sample_available_emoji_id:
-            return  # User is available, don't notify
+        if work_emoji_id is not None and me.emoji_status and me.emoji_status.document_id == work_emoji_id:
+            return  # User has work emoji, don't notify
 
         await mock_telegram_client.send_message("personal_login", "ASAP notification")
 
@@ -255,7 +256,7 @@ class TestAsapHandlerLogic:
         mock_telegram_client.send_message.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_sends_notification_when_unavailable(self, mock_telegram_client, sample_available_emoji_id):
+    async def test_sends_notification_when_unavailable(self, mock_telegram_client, sample_work_emoji_id):
         """Test that handler sends notification when user is unavailable."""
         event = MagicMock()
         event.is_private = True
@@ -263,17 +264,18 @@ class TestAsapHandlerLogic:
         mock_sender = MagicMock()
         mock_sender.username = "urgent_user"
 
-        # User has different emoji (not available)
+        # User has different emoji (not work emoji)
         mock_user = MagicMock()
         mock_user.emoji_status = MagicMock()
-        mock_user.emoji_status.document_id = 1234567890  # Different from available
+        mock_user.emoji_status.document_id = 1234567890  # Different from work emoji
         mock_telegram_client.get_me = AsyncMock(return_value=mock_user)
 
         personal_tg_login = "test_user"
+        work_emoji_id = sample_work_emoji_id  # Simulating Schedule.get_work_emoji_id()
 
         # Handler logic
         me = await mock_telegram_client.get_me()
-        if event.is_private and me.emoji_status and me.emoji_status.document_id != sample_available_emoji_id:
+        if event.is_private and me.emoji_status and (work_emoji_id is None or me.emoji_status.document_id != work_emoji_id):
             await mock_telegram_client.send_message(
                 personal_tg_login,
                 f'Срочный призыв от @{mock_sender.username}'
@@ -283,6 +285,34 @@ class TestAsapHandlerLogic:
         mock_telegram_client.send_message.assert_called_once()
         call_args = mock_telegram_client.send_message.call_args
         assert personal_tg_login in str(call_args)
+
+    @pytest.mark.asyncio
+    async def test_sends_notification_when_no_work_emoji_configured(self, mock_telegram_client):
+        """Test that handler sends notification when no work emoji is configured."""
+        event = MagicMock()
+        event.is_private = True
+
+        mock_sender = MagicMock()
+        mock_sender.username = "urgent_user"
+
+        mock_user = MagicMock()
+        mock_user.emoji_status = MagicMock()
+        mock_user.emoji_status.document_id = 1234567890
+        mock_telegram_client.get_me = AsyncMock(return_value=mock_user)
+
+        personal_tg_login = "test_user"
+        work_emoji_id = None  # No work schedule configured
+
+        # Handler logic - when no work emoji, ASAP always works
+        me = await mock_telegram_client.get_me()
+        if event.is_private and me.emoji_status and (work_emoji_id is None or me.emoji_status.document_id != work_emoji_id):
+            await mock_telegram_client.send_message(
+                personal_tg_login,
+                f'Срочный призыв от @{mock_sender.username}'
+            )
+
+        # Should send notification
+        mock_telegram_client.send_message.assert_called_once()
 
 
 class TestNewMessagesHandlerLogic:

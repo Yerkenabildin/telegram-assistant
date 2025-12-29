@@ -19,11 +19,6 @@ class Config:
     # Personal account for notifications
     personal_tg_login: str = field(default_factory=lambda: os.environ.get('PERSONAL_TG_LOGIN', ''))
 
-    # Emoji status that indicates user is "available" (disables auto-reply)
-    available_emoji_id: int = field(
-        default_factory=lambda: int(os.environ.get('AVAILABLE_EMOJI_ID', 5810051751654460532))
-    )
-
     # Optional webhook URL for ASAP notifications
     asap_webhook_url: Optional[str] = field(
         default_factory=lambda: os.environ.get('ASAP_WEBHOOK_URL') or None

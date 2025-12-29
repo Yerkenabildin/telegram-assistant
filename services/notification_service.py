@@ -5,6 +5,7 @@ from typing import Optional, Any
 import aiohttp
 
 from logging_config import get_logger
+from models import Schedule
 
 logger = get_logger('notification')
 
@@ -22,7 +23,6 @@ class NotificationService:
     def __init__(
         self,
         personal_tg_login: str,
-        available_emoji_id: int,
         webhook_url: Optional[str] = None,
         webhook_timeout: int = 10
     ):
@@ -31,12 +31,10 @@ class NotificationService:
 
         Args:
             personal_tg_login: Telegram username/ID to send notifications to
-            available_emoji_id: Emoji ID that indicates "available" status
             webhook_url: Optional URL to call for ASAP alerts
             webhook_timeout: Timeout for webhook calls in seconds
         """
         self.personal_tg_login = personal_tg_login
-        self.available_emoji_id = available_emoji_id
         self.webhook_url = webhook_url
         self.webhook_timeout = webhook_timeout
 
@@ -65,12 +63,19 @@ class NotificationService:
         if 'asap' not in message_text.lower():
             return False
 
-        # User must not be "available"
+        # User must have emoji status set
         if emoji_status_id is None:
             return False
 
-        if emoji_status_id == self.available_emoji_id:
-            logger.debug("User is available, not sending ASAP notification")
+        # Get work emoji from schedule - if not set, ASAP always works
+        work_emoji_id = Schedule.get_work_emoji_id()
+        if work_emoji_id is None:
+            # No work schedule configured - ASAP notifications always work
+            return True
+
+        # User is "available" (has work emoji status)
+        if emoji_status_id == work_emoji_id:
+            logger.debug("User is available (work emoji), not sending ASAP notification")
             return False
 
         return True

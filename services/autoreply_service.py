@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Any
 
 from logging_config import get_logger
+from models import Schedule
 
 logger = get_logger('autoreply')
 
@@ -31,7 +32,6 @@ class AutoReplyService:
     def should_send_reply(
         self,
         emoji_status_id: Optional[int],
-        available_emoji_id: int,
         reply_exists: bool,
         last_outgoing_message: Optional[Any]
     ) -> bool:
@@ -40,7 +40,6 @@ class AutoReplyService:
 
         Args:
             emoji_status_id: Current user's emoji status ID (None if not set)
-            available_emoji_id: Emoji ID that indicates "available" status
             reply_exists: Whether a reply template exists for this emoji
             last_outgoing_message: Last outgoing message in conversation (for rate limiting)
 
@@ -52,9 +51,10 @@ class AutoReplyService:
             logger.debug("No emoji status set, skipping auto-reply")
             return False
 
-        # User is "available" (special emoji)
-        if emoji_status_id == available_emoji_id:
-            logger.debug("User is available (emoji matches available_emoji_id)")
+        # Get work emoji from schedule - if set, user is "available" when it matches
+        work_emoji_id = Schedule.get_work_emoji_id()
+        if work_emoji_id is not None and emoji_status_id == work_emoji_id:
+            logger.debug("User is available (work emoji), skipping auto-reply")
             return False
 
         # No reply template configured
