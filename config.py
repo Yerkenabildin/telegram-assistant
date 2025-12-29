@@ -56,6 +56,11 @@ class Config:
         default_factory=lambda: os.environ.get('MEETING_API_TOKEN') or None
     )
 
+    # Bot token for control interface (optional, get from @BotFather)
+    bot_token: Optional[str] = field(
+        default_factory=lambda: os.environ.get('BOT_TOKEN') or None
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
