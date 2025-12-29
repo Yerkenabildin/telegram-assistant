@@ -53,6 +53,9 @@ class Config:
     db_path: str = field(default_factory=lambda: os.environ.get('DB_PATH', './storage/database.db'))
     session_path: str = field(default_factory=lambda: os.environ.get('SESSION_PATH', './storage/session'))
 
+    # Timezone for schedule (e.g., 'Europe/Moscow', 'UTC')
+    timezone: str = field(default_factory=lambda: os.environ.get('TIMEZONE', 'Europe/Moscow'))
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []

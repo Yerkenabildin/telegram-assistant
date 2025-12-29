@@ -113,6 +113,7 @@ docker logs -f telegram-assistant
 | `ASAP_WEBHOOK_URL` | NO | - | Webhook URL for urgent message notifications |
 | `SECRET_KEY` | NO | `os.urandom(24)` | Session encryption key |
 | `SCRIPT_NAME` | NO | - | Reverse proxy path prefix |
+| `TIMEZONE` | NO | `Europe/Moscow` | Timezone for schedule (e.g., `Europe/Moscow`, `UTC`) |
 
 ## Event Handlers
 

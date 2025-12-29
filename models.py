@@ -6,13 +6,21 @@ Uses sqlitemodel ORM for SQLite persistence.
 import json
 from datetime import datetime, date
 from typing import Optional, Any
+from zoneinfo import ZoneInfo
 
 from sqlitemodel import Model, Database, SQL
 from telethon.extensions import BinaryReader
 from telethon.tl.types import Message
 
+from config import config
+
 # Configure database path (can be overridden by config)
 Database.DB_FILE = './storage/database.db'
+
+
+def get_now() -> datetime:
+    """Get current datetime in the configured timezone."""
+    return datetime.now(ZoneInfo(config.timezone))
 
 # Day name mappings for parsing
 DAY_NAMES = {
@@ -313,14 +321,14 @@ class Schedule(Model):
         if not self.date_end:
             return False
         if now is None:
-            now = datetime.now()
+            now = get_now()
         current_date = now.strftime('%Y-%m-%d')
         return current_date > self.date_end
 
     def matches_now(self, now=None):
         """Check if this schedule rule matches current time"""
         if now is None:
-            now = datetime.now()
+            now = get_now()
 
         current_date = now.strftime('%Y-%m-%d')
 
@@ -353,7 +361,7 @@ class Schedule(Model):
     def get_current_emoji_id(now=None):
         """Get the emoji_id that should be active right now based on schedule"""
         if now is None:
-            now = datetime.now()
+            now = get_now()
 
         matching_rules = []
         for schedule in Schedule.get_all():
