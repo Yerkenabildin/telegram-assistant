@@ -113,11 +113,6 @@ class TestConfigValidation:
 class TestConfigDefaults:
     """Tests for Config default values."""
 
-    def test_default_available_emoji_id(self):
-        """Test default available_emoji_id."""
-        default_emoji_id = 5810051751654460532
-        assert default_emoji_id == 5810051751654460532
-
     def test_default_port(self):
         """Test default port."""
         default_port = 5050

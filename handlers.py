@@ -19,7 +19,6 @@ from services.notification_service import NotificationService
 _autoreply_service = AutoReplyService(cooldown_minutes=config.autoreply_cooldown_minutes)
 _notification_service = NotificationService(
     personal_tg_login=config.personal_tg_login,
-    available_emoji_id=config.available_emoji_id,
     webhook_url=config.asap_webhook_url,
     webhook_timeout=config.webhook_timeout_seconds
 )
@@ -228,7 +227,6 @@ def register_handlers(client):
 
         if not _autoreply_service.should_send_reply(
             emoji_status_id=emoji_status_id,
-            available_emoji_id=config.available_emoji_id,
             reply_exists=reply is not None,
             last_outgoing_message=last_outgoing
         ):
