@@ -10,7 +10,7 @@ from telethon.tl.functions.account import UpdateEmojiStatusRequest
 from telethon.tl.types import EmojiStatus
 
 from logging_config import logger
-from models import Schedule
+from models import Schedule, Settings
 from config import config
 
 # Create blueprint for auth routes
@@ -185,8 +185,16 @@ async def meeting():
 
     if action == 'start':
         emoji_id = request.args.get('emoji_id')
+
+        # If emoji_id not provided, use saved meeting emoji
         if not emoji_id:
-            return jsonify({"error": "emoji_id is required for start action"}), 400
+            saved_emoji_id = Settings.get('meeting_emoji_id')
+            if saved_emoji_id:
+                emoji_id = saved_emoji_id
+            else:
+                return jsonify({
+                    "error": "emoji_id is required. Set default via /meeting command or pass emoji_id parameter"
+                }), 400
 
         try:
             emoji_id = int(emoji_id)

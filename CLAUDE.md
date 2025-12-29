@@ -145,22 +145,34 @@ Main Telethon event handlers in `main.py`:
 
 Control emoji status during meetings (e.g., Zoom calls):
 
+**Setup (in Telegram settings chat):**
+- `/meeting <emoji>` — set default meeting emoji
+- `/meeting` — show current settings
+- `/meeting clear` — clear default emoji
+
+**API calls:**
 ```bash
-# Start meeting - set "in call" emoji
+# Start meeting - uses saved emoji (set via /meeting command)
+curl -X POST "http://localhost:5050/api/meeting?action=start"
+
+# Start meeting - with explicit emoji
 curl -X POST "http://localhost:5050/api/meeting?action=start&emoji_id=5368324170671202286"
 
 # End meeting - restore scheduled emoji
 curl -X POST "http://localhost:5050/api/meeting?action=end"
 
 # With authentication (if MEETING_API_TOKEN is set)
-curl -X POST "http://localhost:5050/api/meeting?action=start&emoji_id=123&token=your-token"
-# or via header
-curl -X POST -H "X-API-Token: your-token" "http://localhost:5050/api/meeting?action=start&emoji_id=123"
+curl -X POST "http://localhost:5050/api/meeting?action=start&token=your-token"
 ```
 
 Priority: Meeting (50) is above Work (10) but below Override (100), so vacation status won't be overwritten.
 
-7. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
+7. **Meeting commands**: Configure meeting emoji for Zoom/calls integration (outgoing, only in settings chat)
+   - `/meeting` - Show current meeting emoji settings
+   - `/meeting <emoji>` - Set default emoji for meetings
+   - `/meeting clear` - Clear meeting emoji setting
+
+8. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
    - `/schedule` - Show help for schedule commands
    - `/schedule work <emoji>` - Set work hours (Mon-Fri 12:00-20:00, priority 10)
    - `/schedule weekends <emoji>` - Set weekends (Fri 20:00 - Sun 23:59, priority 8)
@@ -174,7 +186,7 @@ Priority: Meeting (50) is above Work (10) but below Override (100), so vacation 
    - `/schedule on/off` - Enable/disable scheduling
    - `/schedule status` - Show current status
 
-8. **Schedule checker**: Background task (runs every minute)
+9. **Schedule checker**: Background task (runs every minute)
    - Checks if scheduling is enabled
    - Gets the emoji that should be active based on current time and date
    - Updates Telegram emoji status if it differs from scheduled

@@ -672,6 +672,94 @@ def register_handlers(client):
 
         await client.send_message(entity=event.input_chat, message='\n'.join(lines))
 
+    # =========================================================================
+    # Meeting Commands
+    # =========================================================================
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^/meeting\s*$"))
+    async def meeting_help(event):
+        """Show meeting help or current meeting emoji."""
+        settings_chat_id = Settings.get_settings_chat_id()
+        if settings_chat_id != event.chat.id:
+            return
+
+        meeting_emoji_id = Settings.get('meeting_emoji_id')
+        active_meeting = Schedule.get_active_meeting()
+
+        lines = ["📞 **Настройка иконки для звонков**", ""]
+
+        if meeting_emoji_id:
+            lines.append(f"• Иконка для звонков: `{meeting_emoji_id}`")
+        else:
+            lines.append("• Иконка для звонков: не установлена")
+
+        if active_meeting:
+            lines.append(f"• 🔴 Сейчас активен звонок (emoji: `{active_meeting.emoji_id}`)")
+        else:
+            lines.append("• Нет активного звонка")
+
+        lines.extend([
+            "",
+            "**Команды:**",
+            "• `/meeting <эмодзи>` — установить иконку для звонков",
+            "• `/meeting clear` — очистить настройку",
+            "",
+            "**API для Zoom:**",
+            "• `POST /api/meeting?action=start` — начать звонок",
+            "• `POST /api/meeting?action=end` — завершить звонок",
+        ])
+
+        await client.send_message(entity=event.input_chat, message='\n'.join(lines))
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^/meeting\s+clear\s*$"))
+    async def meeting_clear(event):
+        """Clear meeting emoji setting."""
+        settings_chat_id = Settings.get_settings_chat_id()
+        if settings_chat_id != event.chat.id:
+            return
+
+        Settings.set('meeting_emoji_id', None)
+        logger.info("Meeting emoji cleared")
+
+        await _send_reaction(client, event, '\u2705')
+
+        await client.send_message(
+            entity=event.input_chat,
+            message="✅ Иконка для звонков очищена"
+        )
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^/meeting\s+.+"))
+    async def meeting_set(event):
+        """Set default meeting emoji."""
+        settings_chat_id = Settings.get_settings_chat_id()
+        if settings_chat_id != event.chat.id:
+            return
+
+        # Skip if it's /meeting clear command
+        if event.message.text.strip().lower() == '/meeting clear':
+            return
+
+        entities = event.message.entities or []
+        custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+        if len(custom_emojis) != 1:
+            await client.send_message(
+                entity=event.input_chat,
+                message="❌ Нужен 1 кастомный эмодзи. Используйте премиум-эмодзи из панели стикеров."
+            )
+            return
+
+        emoji_id = custom_emojis[0].document_id
+        Settings.set('meeting_emoji_id', str(emoji_id))
+        logger.info(f"Meeting emoji set to: {emoji_id}")
+
+        await _send_reaction(client, event, '\u2705')
+
+        await client.send_message(
+            entity=event.input_chat,
+            message=f"✅ Иконка для звонков установлена: `{emoji_id}`\n\nТеперь можно вызывать API без emoji_id:\n`POST /api/meeting?action=start`"
+        )
+
 
 async def _send_reaction(client, event, emoticon: str) -> None:
     """Send a reaction to a message, handling errors gracefully."""
