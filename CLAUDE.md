@@ -138,6 +138,26 @@ Main Telethon event handlers in `main.py`:
 | `/resend` | POST | Request code re-delivery |
 | `/2fa` | GET/POST | Two-factor authentication password |
 
+7. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
+   - `/schedule` - Show help for schedule commands
+   - `/schedule work <emoji>` - Set work hours (Mon-Fri 09:00-18:00, priority 10)
+   - `/schedule weekends <emoji>` - Set weekends (Fri 18:00 - Sun 23:59, priority 8)
+   - `/schedule rest <emoji>` - Set rest time (all other time, priority 1)
+   - `/schedule add <days> <time> <emoji>` - Add custom rule (priority 5)
+   - `/schedule override <dates> <emoji>` - Add temporary override (priority 100, e.g., vacation)
+     - Date formats: `25.12-05.01`, `25.12.2024-05.01.2025`
+   - `/schedule list` - Show all schedule rules (grouped by type)
+   - `/schedule del <ID>` - Delete rule by ID
+   - `/schedule clear` - Delete all rules
+   - `/schedule on/off` - Enable/disable scheduling
+   - `/schedule status` - Show current status
+
+8. **Schedule checker**: Background task (runs every minute)
+   - Checks if scheduling is enabled
+   - Gets the emoji that should be active based on current time and date
+   - Updates Telegram emoji status if it differs from scheduled
+   - Automatically deletes expired override rules (every hour)
+
 ## Data Persistence
 
 ### Database Schema
@@ -162,7 +182,10 @@ CREATE TABLE settings (
 
 ### Files
 - Session file: `./storage/session` (Telethon auth token)
-- Database: `./storage/database.db` (SQLite)
+- Database: `./storage/database.db` (SQLite with Reply, Settings, and Schedule tables)
+- Reply table schema: `emoji` (TEXT), `_message` (serialized Telethon Message object)
+- Settings table schema: `key` (TEXT), `value` (TEXT) - stores `settings_chat_id` and `schedule_enabled`
+- Schedule table schema: `emoji_id` (TEXT), `days` (TEXT), `time_start` (TEXT), `time_end` (TEXT), `priority` (INT), `name` (TEXT), `date_start` (TEXT), `date_end` (TEXT)
 
 ## Authentication Flow
 
