@@ -37,8 +37,9 @@ DAY_DISPLAY = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
 
 # Priority levels
 PRIORITY_REST = 1        # Fallback/rest rules
-PRIORITY_CUSTOM = 5      # Custom user rules
+PRIORITY_WEEKENDS = 8    # Weekends schedule
 PRIORITY_WORK = 10       # Work schedule
+PRIORITY_MEETING = 50    # Active meeting/call (via API)
 PRIORITY_OVERRIDE = 100  # Override rules (vacation, sick leave, etc.)
 
 
@@ -384,6 +385,41 @@ class Schedule(Model):
     def set_scheduling_enabled(enabled):
         """Enable or disable scheduling"""
         Settings.set('schedule_enabled', 'true' if enabled else 'false')
+
+    # Meeting management methods
+    @staticmethod
+    def get_active_meeting():
+        """Get active meeting rule if exists"""
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_MEETING:
+                return rule
+        return None
+
+    @staticmethod
+    def start_meeting(emoji_id):
+        """Start a meeting - creates a high-priority rule that covers all time"""
+        # Remove any existing meeting rule first
+        Schedule.end_meeting()
+
+        # Create meeting rule (all days, all time, priority 50)
+        return Schedule.create(
+            emoji_id=emoji_id,
+            days=[0, 1, 2, 3, 4, 5, 6],
+            time_start="00:00",
+            time_end="23:59",
+            priority=PRIORITY_MEETING,
+            name="meeting"
+        )
+
+    @staticmethod
+    def end_meeting():
+        """End meeting - removes the meeting rule"""
+        meeting = Schedule.get_active_meeting()
+        if meeting:
+            meeting.delete()
+            return True
+        return False
 
 
 def parse_days(days_str):

@@ -56,6 +56,11 @@ class Config:
     # Timezone for schedule (e.g., 'Europe/Moscow', 'UTC')
     timezone: str = field(default_factory=lambda: os.environ.get('TIMEZONE', 'Europe/Moscow'))
 
+    # API token for meeting endpoint (optional, if not set - no auth required)
+    meeting_api_token: Optional[str] = field(
+        default_factory=lambda: os.environ.get('MEETING_API_TOKEN') or None
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
