@@ -52,12 +52,12 @@ def register_handlers(client):
                 "✅ Этот чат выбран для настройки автоответчика.\n\n"
                 "**Автоответы:**\n"
                 "• `/set` — задать автоответ для текущего статуса\n"
-                "• `/set_for <эмодзи>` — задать автоответ для эмодзи\n"
-                "• `/autoreply-off` — отключить автоответчик\n\n"
+                "• `/set_for <эмодзи>` — задать автоответ для эмодзи\n\n"
                 "**Расписание статусов:**\n"
                 "• `/schedule` — справка по расписанию\n"
                 "• `/schedule work <эмодзи>` — ПН-ПТ 12:00-20:00\n"
-                "• `/schedule rest <эмодзи>` — остальное время"
+                "• `/schedule rest <эмодзи>` — остальное время\n\n"
+                "⚙️ `/settings` — дополнительные настройки"
             )
         )
 
@@ -78,6 +78,23 @@ def register_handlers(client):
         await client.send_message(
             entity=event.input_chat,
             message="❌ Автоответчик отключен. Используйте /autoreply-settings в любом чате, чтобы снова включить."
+        )
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^/settings\s*$"))
+    async def settings_menu(event):
+        """Show additional settings menu."""
+        settings_chat_id = Settings.get_settings_chat_id()
+        chat_id = event.chat.id
+
+        if not _autoreply_service.is_settings_chat(chat_id, settings_chat_id):
+            return
+
+        await client.send_message(
+            entity=event.input_chat,
+            message=(
+                "⚙️ **Дополнительные настройки**\n\n"
+                "🚪 `/autoreply-off` — покинуть этот чат и отключить автоответчик"
+            )
         )
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^/set_for\s+.*"))
