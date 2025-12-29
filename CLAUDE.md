@@ -177,7 +177,6 @@ Priority: Meeting (50) is above Work (10) but below Override (100), so vacation 
    - `/schedule work <emoji>` - Set work hours (Mon-Fri 12:00-20:00, priority 10)
    - `/schedule weekends <emoji>` - Set weekends (Fri 20:00 - Sun 23:59, priority 8)
    - `/schedule rest <emoji>` - Set rest time (all other time, priority 1)
-   - `/schedule add <days> <time> <emoji>` - Add custom rule (priority 5)
    - `/schedule override <dates> <emoji>` - Add temporary override (priority 100, e.g., vacation)
      - Date formats: `25.12-05.01`, `25.12.2024-05.01.2025`
    - `/schedule list` - Show all schedule rules (grouped by type)

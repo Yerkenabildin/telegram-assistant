@@ -11,7 +11,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule, parse_days, parse_time_range, parse_date_range, DAY_DISPLAY
+from models import Reply, Settings, Schedule, parse_date_range
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 
@@ -254,26 +254,20 @@ def register_handlers(client):
 
         help_text = """📅 **Управление расписанием эмодзи-статуса**
 
-**Быстрые команды:**
+**Расписание:**
 • `/schedule work <эмодзи>` — рабочие дни ПН-ПТ 12:00-20:00
 • `/schedule weekends <эмодзи>` — выходные (ПТ 20:00 - ВС 23:59)
 • `/schedule rest <эмодзи>` — нерабочее время (всё остальное)
 
-**Кастомные правила:**
-• `/schedule add <дни> <время> <эмодзи>` — добавить правило
-  Примеры дней: `ПН-ПТ`, `СБ-ВС`, `ПН,СР,ПТ`
-  Пример времени: `09:00-18:00`
-
 **Временные переопределения:**
-• `/schedule override <даты> <эмодзи> [название]`
-  Пример: `/schedule override 25.12-31.12 🎄 Отпуск`
+• `/schedule override <даты> <эмодзи>`
+  Пример: `/schedule override 25.12-31.12 🎄`
 
 **Управление:**
 • `/schedule list` — показать все правила
 • `/schedule del <ID>` — удалить правило по ID
 • `/schedule clear` — удалить все правила
-• `/schedule on` — включить расписание
-• `/schedule off` — выключить расписание
+• `/schedule on/off` — включить/выключить
 • `/schedule status` — текущий статус"""
 
         await client.send_message(entity=event.input_chat, message=help_text)
@@ -398,74 +392,6 @@ def register_handlers(client):
         await client.send_message(
             entity=event.input_chat,
             message="✅ Расписание для отдыха добавлено (низкий приоритет — применяется когда нет других правил)"
-        )
-
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^/schedule\s+add\s+(\S+)\s+(\S+)\s+.*"))
-    async def schedule_add(event):
-        """Add custom schedule rule."""
-        settings_chat_id = Settings.get_settings_chat_id()
-        if settings_chat_id != event.chat.id:
-            return
-
-        # Parse command arguments
-        text = event.message.text
-        parts = text.split(maxsplit=3)  # /schedule add DAYS TIME EMOJI
-
-        if len(parts) < 4:
-            await client.send_message(
-                entity=event.input_chat,
-                message="❌ Формат: `/schedule add <дни> <время> <эмодзи>`\nПример: `/schedule add ПН-ПТ 09:00-18:00 💼`"
-            )
-            return
-
-        days_str = parts[2]
-        time_str = parts[3].split()[0]  # Get time before emoji
-
-        days = parse_days(days_str)
-        if days is None:
-            await client.send_message(
-                entity=event.input_chat,
-                message=f"❌ Не могу разобрать дни: `{days_str}`\nПримеры: `ПН-ПТ`, `СБ,ВС`, `ПН,СР,ПТ`"
-            )
-            return
-
-        time_start, time_end = parse_time_range(time_str)
-        if time_start is None or time_end is None:
-            await client.send_message(
-                entity=event.input_chat,
-                message=f"❌ Не могу разобрать время: `{time_str}`\nПример: `09:00-18:00`"
-            )
-            return
-
-        entities = event.message.entities or []
-        custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
-
-        if len(custom_emojis) != 1:
-            await client.send_message(
-                entity=event.input_chat,
-                message="❌ Нужен 1 кастомный эмодзи. Используйте премиум-эмодзи из панели стикеров."
-            )
-            return
-
-        emoji_id = custom_emojis[0].document_id
-        days_display = ', '.join(DAY_DISPLAY[d] for d in days)
-
-        schedule = Schedule.create(
-            emoji_id=emoji_id,
-            days=days,
-            time_start=time_start,
-            time_end=time_end,
-            priority=5,
-            name=f"{days_display} {time_start}-{time_end}"
-        )
-        Schedule.set_scheduling_enabled(True)
-        logger.info(f"Custom schedule #{schedule.id} created for emoji {emoji_id}")
-
-        await _send_reaction(client, event, '\u2705')
-
-        await client.send_message(
-            entity=event.input_chat,
-            message=f"✅ Правило #{schedule.id} добавлено: {days_display} {time_start}-{time_end}"
         )
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^/schedule\s+override\s+(\S+)\s+.*"))

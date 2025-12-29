@@ -37,7 +37,6 @@ DAY_DISPLAY = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
 
 # Priority levels
 PRIORITY_REST = 1        # Fallback/rest rules
-PRIORITY_CUSTOM = 5      # Custom user rules
 PRIORITY_WORK = 10       # Work schedule
 PRIORITY_MEETING = 50    # Active meeting/call (via API)
 PRIORITY_OVERRIDE = 100  # Override rules (vacation, sick leave, etc.)
