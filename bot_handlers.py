@@ -130,6 +130,31 @@ def get_replies_keyboard():
     ]
 
 
+def get_reply_view_keyboard(emoji_id: str):
+    """Keyboard for viewing a specific reply."""
+    return [
+        [Button.inline("✏️ Изменить", f"reply_edit:{emoji_id}".encode())],
+        [Button.inline("🗑 Удалить", f"reply_del_confirm:{emoji_id}".encode())],
+        [Button.inline("« Назад", b"replies_list")],
+    ]
+
+
+def get_reply_edit_confirm_keyboard(emoji_id: str):
+    """Keyboard for confirming reply edit."""
+    return [
+        [Button.inline("✅ Да", f"reply_edit_yes:{emoji_id}".encode()),
+         Button.inline("❌ Нет", f"reply_view:{emoji_id}".encode())],
+    ]
+
+
+def get_reply_delete_confirm_keyboard(emoji_id: str):
+    """Keyboard for confirming reply delete."""
+    return [
+        [Button.inline("✅ Да, удалить", f"reply_del:{emoji_id}".encode()),
+         Button.inline("❌ Нет", f"reply_view:{emoji_id}".encode())],
+    ]
+
+
 # =============================================================================
 # Handler Registration
 # =============================================================================
@@ -230,7 +255,7 @@ def register_bot_handlers(bot):
 
     @bot.on(events.CallbackQuery(data=b"replies_list"))
     async def replies_list(event):
-        """List all configured replies."""
+        """List all configured replies as buttons."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
@@ -245,15 +270,138 @@ def register_bot_handlers(bot):
             )
             return
 
-        lines = ["📝 **Настроенные автоответы:**\n"]
-        for r in replies[:10]:  # Limit to 10
+        # Build buttons for each reply (limit to 8 for UI)
+        buttons = []
+        for r in replies[:8]:
             emoji_id = r.emoji
-            lines.append(f"• Emoji ID: `{emoji_id}`")
+            # Button text: emoji placeholder + ID
+            btn_text = f"📝 {emoji_id}"
+            buttons.append([Button.inline(btn_text, f"reply_view:{emoji_id}".encode())])
 
-        if len(replies) > 10:
-            lines.append(f"\n... и ещё {len(replies) - 10}")
+        if len(replies) > 8:
+            buttons.append([Button.inline(f"... ещё {len(replies) - 8}", b"replies_list")])
 
-        await event.edit('\n'.join(lines), buttons=get_replies_keyboard())
+        buttons.append([Button.inline("« Назад", b"replies")])
+
+        await event.edit("📝 **Выберите автоответ:**", buttons=buttons)
+
+    @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
+    async def reply_view(event):
+        """View a specific reply."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        emoji_id = event.pattern_match.group(1).decode()
+        reply = Reply.get_by_emoji(emoji_id)
+
+        if not reply:
+            await event.answer("❌ Автоответ не найден", alert=True)
+            return
+
+        # Get message text
+        msg = reply.message
+        text_preview = msg.text[:200] if msg and msg.text else "(нет текста)"
+        if msg and msg.text and len(msg.text) > 200:
+            text_preview += "..."
+
+        await event.edit(
+            f"📝 **Автоответ**\n\n"
+            f"**Emoji ID:** `{emoji_id}`\n\n"
+            f"**Текст:**\n{text_preview}",
+            buttons=get_reply_view_keyboard(emoji_id)
+        )
+
+    @bot.on(events.CallbackQuery(pattern=b"reply_edit:(.+)"))
+    async def reply_edit_start(event):
+        """Start editing a reply - ask for new text."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        emoji_id = event.pattern_match.group(1).decode()
+
+        # Store pending edit state
+        _pending_reply_edit[event.sender_id] = {'emoji_id': emoji_id, 'message': None}
+
+        await event.edit(
+            f"✏️ **Редактирование автоответа**\n\n"
+            f"**Emoji ID:** `{emoji_id}`\n\n"
+            f"Отправьте новый текст автоответа:",
+            buttons=[[Button.inline("❌ Отмена", f"reply_view:{emoji_id}".encode())]]
+        )
+
+    @bot.on(events.CallbackQuery(pattern=b"reply_edit_yes:(.+)"))
+    async def reply_edit_confirm(event):
+        """Confirm and save the edited reply."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        emoji_id = event.pattern_match.group(1).decode()
+
+        # Get pending edit
+        pending = _pending_reply_edit.get(event.sender_id)
+        if not pending or pending['emoji_id'] != emoji_id or not pending['message']:
+            await event.answer("❌ Ошибка: нет данных для сохранения", alert=True)
+            return
+
+        # Save the reply
+        Reply.create(emoji_id, pending['message'])
+        del _pending_reply_edit[event.sender_id]
+        logger.info(f"Reply updated for emoji {emoji_id} via bot")
+
+        await event.answer("✅ Автоответ сохранён")
+
+        # Show updated reply
+        reply = Reply.get_by_emoji(emoji_id)
+        msg = reply.message
+        text_preview = msg.text[:200] if msg and msg.text else "(нет текста)"
+        if msg and msg.text and len(msg.text) > 200:
+            text_preview += "..."
+
+        await event.edit(
+            f"📝 **Автоответ**\n\n"
+            f"**Emoji ID:** `{emoji_id}`\n\n"
+            f"**Текст:**\n{text_preview}",
+            buttons=get_reply_view_keyboard(emoji_id)
+        )
+
+    @bot.on(events.CallbackQuery(pattern=b"reply_del_confirm:(.+)"))
+    async def reply_delete_confirm(event):
+        """Ask for delete confirmation."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        emoji_id = event.pattern_match.group(1).decode()
+
+        await event.edit(
+            f"⚠️ **Удалить автоответ?**\n\n"
+            f"**Emoji ID:** `{emoji_id}`\n\n"
+            f"Это действие нельзя отменить.",
+            buttons=get_reply_delete_confirm_keyboard(emoji_id)
+        )
+
+    @bot.on(events.CallbackQuery(pattern=b"reply_del:(.+)"))
+    async def reply_delete(event):
+        """Delete a reply."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        emoji_id = event.pattern_match.group(1).decode()
+        reply = Reply.get_by_emoji(emoji_id)
+
+        if reply:
+            reply.delete()
+            logger.info(f"Reply deleted for emoji {emoji_id} via bot")
+            await event.answer("✅ Автоответ удалён")
+        else:
+            await event.answer("❌ Автоответ не найден", alert=True)
+
+        # Return to list
+        await replies_list(event)
 
     # =========================================================================
     # Schedule
@@ -493,10 +641,12 @@ def register_bot_handlers(bot):
 
     # Store pending reply setup: {user_id: emoji_id}
     _pending_reply_setup: dict[int, int] = {}
+    # Store pending reply edit: {user_id: {'emoji_id': str, 'message': Message}}
+    _pending_reply_edit: dict[int, dict] = {}
 
     @bot.on(events.NewMessage(func=lambda e: e.is_private))
     async def handle_private_message(event):
-        """Handle private messages for reply setup."""
+        """Handle private messages for reply setup and editing."""
         if not await _is_owner(event):
             return
 
@@ -504,7 +654,27 @@ def register_bot_handlers(bot):
         if event.message.text and event.message.text.startswith('/'):
             return
 
-        # Check if message contains custom emoji
+        # Check if we're editing an existing reply
+        if event.sender_id in _pending_reply_edit:
+            pending = _pending_reply_edit[event.sender_id]
+            emoji_id = pending['emoji_id']
+            pending['message'] = event.message
+
+            # Preview and ask for confirmation
+            text_preview = event.message.text[:200] if event.message.text else "(нет текста)"
+            if event.message.text and len(event.message.text) > 200:
+                text_preview += "..."
+
+            await event.respond(
+                f"✏️ **Подтверждение изменения**\n\n"
+                f"**Emoji ID:** `{emoji_id}`\n\n"
+                f"**Новый текст:**\n{text_preview}\n\n"
+                f"Сохранить изменения?",
+                buttons=get_reply_edit_confirm_keyboard(emoji_id)
+            )
+            return
+
+        # Check if message contains custom emoji (new reply setup)
         entities = event.message.entities or []
         custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
 
@@ -521,7 +691,7 @@ def register_bot_handlers(bot):
             )
             return
 
-        # Check if we have pending emoji
+        # Check if we have pending emoji (new reply)
         if event.sender_id in _pending_reply_setup:
             emoji_id = _pending_reply_setup.pop(event.sender_id)
 
@@ -543,6 +713,8 @@ def register_bot_handlers(bot):
 
         if event.sender_id in _pending_reply_setup:
             del _pending_reply_setup[event.sender_id]
+        if event.sender_id in _pending_reply_edit:
+            del _pending_reply_edit[event.sender_id]
 
         await event.edit(
             "❌ Настройка автоответа отменена.",
