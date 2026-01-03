@@ -180,6 +180,27 @@ async def run_telethon():
         set_owner_username(me.username)
     logger.info(f"Telethon client authorized as {me.id} (@{me.username}), starting event loop")
 
+    # Send welcome message via bot if configured
+    if bot:
+        # Wait for bot to be ready (max 10 seconds)
+        for _ in range(20):
+            if await bot.is_user_authorized():
+                break
+            await asyncio.sleep(0.5)
+
+        if await bot.is_user_authorized():
+            try:
+                from bot_handlers import get_main_menu_keyboard
+                await bot.send_message(
+                    me.id,
+                    "🤖 **Панель управления автоответчиком**\n\n"
+                    "Бот готов к работе! Выберите раздел:",
+                    buttons=get_main_menu_keyboard()
+                )
+                logger.info("Welcome message sent to owner")
+            except Exception as e:
+                logger.warning(f"Failed to send welcome message: {e}")
+
     # Start schedule checker as a background task
     asyncio.create_task(schedule_checker())
 
