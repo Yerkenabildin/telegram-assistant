@@ -270,17 +270,29 @@ def register_bot_handlers(bot):
             )
             return
 
-        # Build list with emoji IDs (bots can't send custom emojis)
-        lines = ["📝 **Выберите автоответ:**\n"]
+        # Build list with custom emojis
+        text = "📝 **Выберите автоответ:**"
+        entities = []
         buttons = []
 
         for i, r in enumerate(replies[:8], 1):
             emoji_id = r.emoji
-            # Show short ID for readability
-            short_id = f"...{emoji_id[-6:]}" if len(emoji_id) > 10 else emoji_id
-            lines.append(f"{i}. `{short_id}`")
 
-            # Button shows number
+            # Add line with placeholder for custom emoji
+            # Format: "\n\n1. X" where X will be replaced by custom emoji
+            prefix = f"\n\n{i}. "
+            placeholder = "\u2B50"  # ⭐ as placeholder (1 char)
+
+            emoji_offset = len(text) + len(prefix)
+            text += prefix + placeholder
+
+            # Custom emoji entity
+            entities.append(MessageEntityCustomEmoji(
+                offset=emoji_offset,
+                length=1,
+                document_id=int(emoji_id)
+            ))
+
             buttons.append([Button.inline(f"{i}", f"reply_view:{emoji_id}".encode())])
 
         if len(replies) > 8:
@@ -288,7 +300,15 @@ def register_bot_handlers(bot):
 
         buttons.append([Button.inline("« Назад", b"replies")])
 
-        await event.edit("\n".join(lines), buttons=buttons)
+        try:
+            await event.edit(text, formatting_entities=entities, buttons=buttons)
+        except Exception as e:
+            # Fallback: show without custom emojis
+            logger.warning(f"Failed to send custom emojis: {e}")
+            lines = ["📝 **Выберите автоответ:**\n"]
+            for i, r in enumerate(replies[:8], 1):
+                lines.append(f"{i}. ID: `{r.emoji}`")
+            await event.edit("\n".join(lines), buttons=buttons)
 
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
     async def reply_view(event):
