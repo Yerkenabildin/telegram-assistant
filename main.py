@@ -186,11 +186,11 @@ async def run_telethon():
     if bot:
         # Wait for bot to be ready (max 10 seconds)
         for _ in range(20):
-            if await bot.is_user_authorized():
+            if bot.is_connected() and await bot.is_user_authorized():
                 break
             await asyncio.sleep(0.5)
 
-        if await bot.is_user_authorized():
+        if bot.is_connected() and await bot.is_user_authorized():
             try:
                 from bot_handlers import get_main_menu_keyboard
                 await bot.send_message(
