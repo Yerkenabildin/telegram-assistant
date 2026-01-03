@@ -22,6 +22,7 @@ from models import Reply, Settings, Schedule
 # Store owner user ID (set when user client is authorized)
 _owner_id: int | None = None
 _owner_username: str | None = None
+_user_client = None  # User client for sending custom emojis
 
 
 def set_owner_id(user_id: int) -> None:
@@ -159,13 +160,16 @@ def get_reply_delete_confirm_keyboard(emoji_id: str):
 # Handler Registration
 # =============================================================================
 
-def register_bot_handlers(bot):
+def register_bot_handlers(bot, user_client=None):
     """
     Register all bot event handlers.
 
     Args:
         bot: Telethon bot client instance
+        user_client: Telethon user client for sending custom emojis
     """
+    global _user_client
+    _user_client = user_client
 
     @bot.on(events.NewMessage(pattern=r"^/start"))
     async def start_handler(event):
@@ -270,45 +274,55 @@ def register_bot_handlers(bot):
             )
             return
 
-        # Build list with custom emojis
-        text = "📝 **Выберите автоответ:**"
-        entities = []
         buttons = []
-
         for i, r in enumerate(replies[:8], 1):
-            emoji_id = r.emoji
-
-            # Add line with placeholder for custom emoji
-            # Format: "\n\n1. X" where X will be replaced by custom emoji
-            prefix = f"\n\n{i}. "
-            placeholder = "\u2B50"  # ⭐ as placeholder (1 char)
-
-            emoji_offset = len(text) + len(prefix)
-            text += prefix + placeholder
-
-            # Custom emoji entity
-            entities.append(MessageEntityCustomEmoji(
-                offset=emoji_offset,
-                length=1,
-                document_id=int(emoji_id)
-            ))
-
-            buttons.append([Button.inline(f"{i}", f"reply_view:{emoji_id}".encode())])
+            buttons.append([Button.inline(f"{i}", f"reply_view:{r.emoji}".encode())])
 
         if len(replies) > 8:
             buttons.append([Button.inline(f"... ещё {len(replies) - 8}", b"replies_list")])
 
         buttons.append([Button.inline("« Назад", b"replies")])
 
-        try:
-            await event.edit(text, formatting_entities=entities, buttons=buttons)
-        except Exception as e:
-            # Fallback: show without custom emojis
-            logger.warning(f"Failed to send custom emojis: {e}")
-            lines = ["📝 **Выберите автоответ:**\n"]
-            for i, r in enumerate(replies[:8], 1):
-                lines.append(f"{i}. ID: `{r.emoji}`")
-            await event.edit("\n".join(lines), buttons=buttons)
+        # Try to send custom emojis via user client
+        if _user_client:
+            try:
+                # Build text with custom emojis
+                text = "📝 Выберите автоответ:"
+                entities = []
+
+                for i, r in enumerate(replies[:8], 1):
+                    prefix = f"\n\n{i}. "
+                    placeholder = "\u2B50"
+
+                    emoji_offset = len(text) + len(prefix)
+                    text += prefix + placeholder
+
+                    entities.append(MessageEntityCustomEmoji(
+                        offset=emoji_offset,
+                        length=1,
+                        document_id=int(r.emoji)
+                    ))
+
+                chat_id = event.chat_id
+
+                # User client sends emoji list (no buttons - only bots can do that)
+                await _user_client.send_message(
+                    chat_id,
+                    text,
+                    formatting_entities=entities
+                )
+
+                # Bot edits its message to show only buttons
+                await event.edit("Выберите номер:", buttons=buttons)
+                return
+            except Exception as e:
+                logger.warning(f"Failed to send via user client: {e}")
+
+        # Fallback: bot sends without custom emojis
+        lines = ["📝 **Выберите автоответ:**\n"]
+        for i, r in enumerate(replies[:8], 1):
+            lines.append(f"{i}. ID: `{r.emoji}`")
+        await event.edit("\n".join(lines), buttons=buttons)
 
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
     async def reply_view(event):

@@ -79,7 +79,7 @@ register_handlers(client)
 
 # Register bot handlers if bot is configured
 if bot:
-    register_bot_handlers(bot)
+    register_bot_handlers(bot, client)
 
 
 # =============================================================================
