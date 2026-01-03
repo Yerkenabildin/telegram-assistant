@@ -93,18 +93,3 @@ class AutoReplyService:
             return True
 
         return True
-
-    def is_settings_chat(self, chat_id: int, settings_chat_id: Optional[int]) -> bool:
-        """
-        Check if given chat is the configured settings chat.
-
-        Args:
-            chat_id: Current chat ID
-            settings_chat_id: Configured settings chat ID
-
-        Returns:
-            True if chat is the settings chat
-        """
-        if settings_chat_id is None:
-            return False
-        return chat_id == settings_chat_id
