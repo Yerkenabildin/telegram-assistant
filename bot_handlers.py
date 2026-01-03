@@ -309,11 +309,9 @@ def register_bot_handlers(bot, user_client=None):
 
         buttons.append([Button.inline("« Назад", b"replies")])
 
-        # Try to send custom emojis via user client
+        # Try to send/edit custom emojis via user client
         if _user_client and _bot_username:
             try:
-                # Delete old emoji list message first
-                await _delete_emoji_list_message()
                 # Get emoji documents to find alt text
                 emoji_ids = [int(r.emoji) for r in replies[:8]]
                 docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=emoji_ids))
@@ -333,7 +331,6 @@ def register_bot_handlers(bot, user_client=None):
                 for i, r in enumerate(replies[:8], 1):
                     emoji_id = int(r.emoji)
                     prefix = f"\n\n{i}. "
-                    # Use correct alt emoji or fallback to star
                     alt_emoji = alt_map.get(emoji_id, "⭐")
 
                     emoji_offset = len(text) + len(prefix)
@@ -345,14 +342,23 @@ def register_bot_handlers(bot, user_client=None):
                         document_id=emoji_id
                     ))
 
-                # User client sends to bot
                 global _emoji_list_message_id
-                msg = await _user_client.send_message(
-                    _bot_username,
-                    text,
-                    formatting_entities=entities
-                )
-                _emoji_list_message_id = msg.id
+
+                # Edit existing message or send new one
+                if _emoji_list_message_id:
+                    await _user_client.edit_message(
+                        _bot_username,
+                        _emoji_list_message_id,
+                        text,
+                        formatting_entities=entities
+                    )
+                else:
+                    msg = await _user_client.send_message(
+                        _bot_username,
+                        text,
+                        formatting_entities=entities
+                    )
+                    _emoji_list_message_id = msg.id
 
                 # Bot edits its message to show only buttons
                 await event.edit("Выберите номер:", buttons=buttons)
