@@ -12,6 +12,8 @@ from __future__ import annotations
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji
 
+from sqlitemodel import SQL
+
 from config import config
 from logging_config import logger
 from models import Reply, Settings, Schedule
@@ -183,7 +185,7 @@ def register_bot_handlers(bot):
         current_emoji_id = Schedule.get_current_emoji_id()
 
         # Get replies count
-        replies = Reply().select()
+        replies = Reply().select(SQL())
         replies_count = len(replies) if replies else 0
 
         # Get meeting status
@@ -233,7 +235,7 @@ def register_bot_handlers(bot):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        replies = Reply().select()
+        replies = Reply().select(SQL())
 
         if not replies:
             await event.edit(
