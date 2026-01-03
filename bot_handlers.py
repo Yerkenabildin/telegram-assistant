@@ -10,7 +10,7 @@ Provides inline keyboard interface for managing:
 from __future__ import annotations
 
 from telethon import events, Button
-from telethon.tl.types import MessageEntityCustomEmoji
+from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold
 
 from sqlitemodel import SQL
 
@@ -271,31 +271,33 @@ def register_bot_handlers(bot):
             return
 
         # Build message text with custom emojis and buttons
-        # Format: "1. ⭐ (emoji_id)\n2. ⭐ (emoji_id)\n..."
-        lines = ["📝 **Выберите автоответ:**\n"]
-        entities = []
+        header = "📝 Выберите автоответ:"
+        entities = [
+            MessageEntityBold(offset=3, length=len("Выберите автоответ:"))
+        ]
         buttons = []
 
+        # Build lines for each reply
+        text = header
         for i, r in enumerate(replies[:8], 1):
             emoji_id = r.emoji
-            # Build line: "1. ⭐ (id)"
-            prefix = f"{i}. "
-            placeholder = "⭐"  # Will be replaced with custom emoji
-            suffix = f" ({emoji_id})"
 
-            line_start = sum(len(line) + 1 for line in lines)  # +1 for newline
-            emoji_offset = line_start + len(prefix)
+            # Calculate offset before adding the line
+            # Format: "\n\nN. ⭐ (id)"
+            prefix = f"\n\n{i}. "
+            emoji_offset = len(text) + len(prefix)
 
-            lines.append(f"{prefix}{placeholder}{suffix}")
+            line = f"{prefix}⭐ ({emoji_id})"
+            text += line
 
             # Add custom emoji entity
             entities.append(MessageEntityCustomEmoji(
                 offset=emoji_offset,
-                length=len(placeholder),
+                length=1,  # ⭐ is 1 character
                 document_id=int(emoji_id)
             ))
 
-            # Button just shows number
+            # Button shows number
             buttons.append([Button.inline(f"{i}", f"reply_view:{emoji_id}".encode())])
 
         if len(replies) > 8:
@@ -303,7 +305,6 @@ def register_bot_handlers(bot):
 
         buttons.append([Button.inline("« Назад", b"replies")])
 
-        text = "\n".join(lines)
         await event.edit(text, formatting_entities=entities, buttons=buttons)
 
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
