@@ -25,6 +25,7 @@ _owner_id: int | None = None
 _owner_username: str | None = None
 _user_client = None  # User client for sending custom emojis
 _bot_username: str | None = None  # Bot username for user client to send messages
+_emoji_list_message_id: int | None = None  # Message ID of emoji list from user client
 
 
 def set_owner_id(user_id: int) -> None:
@@ -180,6 +181,16 @@ def register_bot_handlers(bot, user_client=None):
     global _user_client
     _user_client = user_client
 
+    async def _delete_emoji_list_message():
+        """Delete the emoji list message from user client."""
+        global _emoji_list_message_id
+        if _user_client and _bot_username and _emoji_list_message_id:
+            try:
+                await _user_client.delete_messages(_bot_username, _emoji_list_message_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete emoji list message: {e}")
+            _emoji_list_message_id = None
+
     @bot.on(events.NewMessage(pattern=r"^/start"))
     async def start_handler(event):
         """Handle /start command - show main menu."""
@@ -199,6 +210,9 @@ def register_bot_handlers(bot, user_client=None):
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
+
+        # Delete emoji list message when returning to main menu
+        await _delete_emoji_list_message()
 
         await event.edit(
             "🤖 **Панель управления автоответчиком**\n\n"
@@ -256,6 +270,9 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
+        # Delete emoji list message when returning to menu
+        await _delete_emoji_list_message()
+
         text = (
             "📝 **Автоответы**\n\n"
             "Для настройки автоответа отправьте боту:\n"
@@ -295,6 +312,8 @@ def register_bot_handlers(bot, user_client=None):
         # Try to send custom emojis via user client
         if _user_client and _bot_username:
             try:
+                # Delete old emoji list message first
+                await _delete_emoji_list_message()
                 # Get emoji documents to find alt text
                 emoji_ids = [int(r.emoji) for r in replies[:8]]
                 docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=emoji_ids))
@@ -327,11 +346,13 @@ def register_bot_handlers(bot, user_client=None):
                     ))
 
                 # User client sends to bot
-                await _user_client.send_message(
+                global _emoji_list_message_id
+                msg = await _user_client.send_message(
                     _bot_username,
                     text,
                     formatting_entities=entities
                 )
+                _emoji_list_message_id = msg.id
 
                 # Bot edits its message to show only buttons
                 await event.edit("Выберите номер:", buttons=buttons)
@@ -358,6 +379,39 @@ def register_bot_handlers(bot, user_client=None):
         if not reply:
             await event.answer("❌ Автоответ не найден", alert=True)
             return
+
+        # Edit user client message to show selected emoji
+        global _emoji_list_message_id
+        if _user_client and _bot_username and _emoji_list_message_id:
+            try:
+                # Get emoji alt text
+                docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=[int(emoji_id)]))
+                alt_emoji = "⭐"
+                for doc in docs:
+                    for attr in doc.attributes:
+                        if isinstance(attr, DocumentAttributeCustomEmoji):
+                            alt_emoji = attr.alt
+                            break
+
+                # Build "selected" message with custom emoji
+                text = "✅ Выбран: "
+                emoji_offset = len(text)
+                text += alt_emoji
+
+                entities = [MessageEntityCustomEmoji(
+                    offset=emoji_offset,
+                    length=len(alt_emoji),
+                    document_id=int(emoji_id)
+                )]
+
+                await _user_client.edit_message(
+                    _bot_username,
+                    _emoji_list_message_id,
+                    text,
+                    formatting_entities=entities
+                )
+            except Exception as e:
+                logger.warning(f"Failed to edit user client message: {e}")
 
         # Get message info
         msg = reply.message
