@@ -17,6 +17,7 @@ from models import Reply, Settings, Schedule
 
 # Store owner user ID (set when user client is authorized)
 _owner_id: int | None = None
+_owner_username: str | None = None
 
 
 def set_owner_id(user_id: int) -> None:
@@ -26,14 +27,31 @@ def set_owner_id(user_id: int) -> None:
     logger.info(f"Bot owner set to user ID: {user_id}")
 
 
+def set_owner_username(username: str) -> None:
+    """Set the owner username as fallback."""
+    global _owner_username
+    _owner_username = username.lower().lstrip('@')
+    logger.info(f"Bot owner username set to: {_owner_username}")
+
+
 def get_owner_id() -> int | None:
     """Get the owner user ID."""
     return _owner_id
 
 
-def _is_owner(user_id: int) -> bool:
+async def _is_owner(event) -> bool:
     """Check if user is the owner."""
-    return _owner_id is not None and user_id == _owner_id
+    # Check by user ID first
+    if _owner_id is not None and event.sender_id == _owner_id:
+        return True
+
+    # Fallback: check by username
+    if _owner_username:
+        sender = await event.get_sender()
+        if sender and getattr(sender, 'username', None):
+            return sender.username.lower() == _owner_username
+
+    return False
 
 
 # =============================================================================
@@ -123,7 +141,7 @@ def register_bot_handlers(bot):
     @bot.on(events.NewMessage(pattern=r"^/start"))
     async def start_handler(event):
         """Handle /start command - show main menu."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.respond("⛔ Доступ запрещён. Этот бот только для владельца.")
             return
 
@@ -136,7 +154,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"main"))
     async def main_menu(event):
         """Return to main menu."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -153,7 +171,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"status"))
     async def status_handler(event):
         """Show current status."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -192,7 +210,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"replies"))
     async def replies_menu(event):
         """Show replies menu."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -209,7 +227,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"replies_list"))
     async def replies_list(event):
         """List all configured replies."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -240,7 +258,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"schedule"))
     async def schedule_menu(event):
         """Show schedule menu."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -258,7 +276,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"schedule_list"))
     async def schedule_list_handler(event):
         """List all schedule rules."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -295,7 +313,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"schedule_on"))
     async def schedule_enable(event):
         """Enable scheduling."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -309,7 +327,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"schedule_off"))
     async def schedule_disable(event):
         """Disable scheduling."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -323,7 +341,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"schedule_clear_confirm"))
     async def schedule_clear_confirm(event):
         """Confirm schedule clear."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -336,7 +354,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"confirm_schedule_clear"))
     async def schedule_clear(event):
         """Clear all schedule rules."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -358,7 +376,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"meeting"))
     async def meeting_menu(event):
         """Show meeting menu."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -381,7 +399,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"meeting_start"))
     async def meeting_start(event):
         """Start a meeting."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -400,7 +418,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"meeting_end"))
     async def meeting_end(event):
         """End a meeting."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -417,7 +435,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"settings"))
     async def settings_menu(event):
         """Show settings menu."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -437,7 +455,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"autoreply_off_confirm"))
     async def autoreply_off_confirm(event):
         """Confirm autoreply disable."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -450,7 +468,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"confirm_autoreply_off"))
     async def autoreply_off(event):
         """Disable autoreply."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
@@ -475,7 +493,7 @@ def register_bot_handlers(bot):
     @bot.on(events.NewMessage(func=lambda e: e.is_private))
     async def handle_private_message(event):
         """Handle private messages for reply setup."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             return
 
         # Skip commands
@@ -516,7 +534,7 @@ def register_bot_handlers(bot):
     @bot.on(events.CallbackQuery(data=b"cancel_reply_setup"))
     async def cancel_reply_setup(event):
         """Cancel reply setup."""
-        if not _is_owner(event.sender_id):
+        if not await _is_owner(event):
             return
 
         if event.sender_id in _pending_reply_setup:

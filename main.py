@@ -17,7 +17,7 @@ from logging_config import logger
 from models import Reply, Settings, Schedule
 from routes import register_routes
 from handlers import register_handlers
-from bot_handlers import register_bot_handlers, set_owner_id
+from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username
 from telethon.tl.functions.account import UpdateEmojiStatusRequest
 from telethon.tl.types import EmojiStatus
 
@@ -78,6 +78,9 @@ register_handlers(client)
 # Register bot handlers if bot is configured
 if bot:
     register_bot_handlers(bot)
+    # Set owner username from config for access control fallback
+    if config.personal_tg_login:
+        set_owner_username(config.personal_tg_login)
 
 
 # =============================================================================
