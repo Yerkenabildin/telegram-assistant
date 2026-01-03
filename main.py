@@ -5,6 +5,8 @@ Main entry point that runs:
 - Quart web server for authentication
 - Telethon client for message handling
 """
+from __future__ import annotations
+
 import asyncio
 
 import hypercorn

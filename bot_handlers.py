@@ -7,6 +7,8 @@ Provides inline keyboard interface for managing:
 - Meetings
 - Settings
 """
+from __future__ import annotations
+
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji
 
