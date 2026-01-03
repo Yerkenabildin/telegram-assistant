@@ -10,7 +10,7 @@ Provides inline keyboard interface for managing:
 from __future__ import annotations
 
 from telethon import events, Button
-from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold
+from telethon.tl.types import MessageEntityCustomEmoji
 
 from sqlitemodel import SQL
 
@@ -270,32 +270,15 @@ def register_bot_handlers(bot):
             )
             return
 
-        # Build message text with custom emojis and buttons
-        header = "📝 Выберите автоответ:"
-        entities = [
-            MessageEntityBold(offset=3, length=len("Выберите автоответ:"))
-        ]
+        # Build list with emoji IDs (bots can't send custom emojis)
+        lines = ["📝 **Выберите автоответ:**\n"]
         buttons = []
 
-        # Build lines for each reply
-        text = header
         for i, r in enumerate(replies[:8], 1):
             emoji_id = r.emoji
-
-            # Calculate offset before adding the line
-            # Format: "\n\nN. ⭐ (id)"
-            prefix = f"\n\n{i}. "
-            emoji_offset = len(text) + len(prefix)
-
-            line = f"{prefix}⭐ ({emoji_id})"
-            text += line
-
-            # Add custom emoji entity
-            entities.append(MessageEntityCustomEmoji(
-                offset=emoji_offset,
-                length=1,  # ⭐ is 1 character
-                document_id=int(emoji_id)
-            ))
+            # Show short ID for readability
+            short_id = f"...{emoji_id[-6:]}" if len(emoji_id) > 10 else emoji_id
+            lines.append(f"{i}. `{short_id}`")
 
             # Button shows number
             buttons.append([Button.inline(f"{i}", f"reply_view:{emoji_id}".encode())])
@@ -305,7 +288,7 @@ def register_bot_handlers(bot):
 
         buttons.append([Button.inline("« Назад", b"replies")])
 
-        await event.edit(text, formatting_entities=entities, buttons=buttons)
+        await event.edit("\n".join(lines), buttons=buttons)
 
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
     async def reply_view(event):
@@ -321,11 +304,24 @@ def register_bot_handlers(bot):
             await event.answer("❌ Автоответ не найден", alert=True)
             return
 
-        # Get message text
+        # Get message info
         msg = reply.message
-        text_preview = msg.text[:200] if msg and msg.text else "(нет текста)"
-        if msg and msg.text and len(msg.text) > 200:
-            text_preview += "..."
+        if msg is None:
+            text_preview = "(ошибка чтения сообщения)"
+        elif msg.text:
+            text_preview = msg.text[:200]
+            if len(msg.text) > 200:
+                text_preview += "..."
+        elif msg.message:  # Alternative field name
+            text_preview = msg.message[:200]
+            if len(msg.message) > 200:
+                text_preview += "..."
+        else:
+            # Check for media
+            if msg.media:
+                text_preview = "(медиа-сообщение без текста)"
+            else:
+                text_preview = "(пустое сообщение)"
 
         await event.edit(
             f"📝 **Автоответ**\n\n"
