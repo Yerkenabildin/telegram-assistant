@@ -78,9 +78,6 @@ register_handlers(client)
 # Register bot handlers if bot is configured
 if bot:
     register_bot_handlers(bot)
-    # Set owner username from config for access control fallback
-    if config.personal_tg_login:
-        set_owner_username(config.personal_tg_login)
 
 
 # =============================================================================
@@ -176,10 +173,12 @@ async def run_telethon():
         logger.info("Waiting for authorization...")
         await asyncio.sleep(3)
 
-    # Set owner ID for bot access control
+    # Set owner ID and username for bot access control
     me = await client.get_me()
     set_owner_id(me.id)
-    logger.info(f"Telethon client authorized as {me.id}, starting event loop")
+    if me.username:
+        set_owner_username(me.username)
+    logger.info(f"Telethon client authorized as {me.id} (@{me.username}), starting event loop")
 
     # Start schedule checker as a background task
     asyncio.create_task(schedule_checker())
