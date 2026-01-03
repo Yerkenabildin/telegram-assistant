@@ -10,7 +10,8 @@ Provides inline keyboard interface for managing:
 from __future__ import annotations
 
 from telethon import events, Button
-from telethon.tl.types import MessageEntityCustomEmoji
+from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomEmoji
+from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest
 
 from sqlitemodel import SQL
 
@@ -294,24 +295,38 @@ def register_bot_handlers(bot, user_client=None):
         # Try to send custom emojis via user client
         if _user_client and _bot_username:
             try:
+                # Get emoji documents to find alt text
+                emoji_ids = [int(r.emoji) for r in replies[:8]]
+                docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=emoji_ids))
+
+                # Map document_id -> alt emoji
+                alt_map = {}
+                for doc in docs:
+                    for attr in doc.attributes:
+                        if isinstance(attr, DocumentAttributeCustomEmoji):
+                            alt_map[doc.id] = attr.alt
+                            break
+
                 # Build text with custom emojis
                 text = "📝 Выберите автоответ:"
                 entities = []
 
                 for i, r in enumerate(replies[:8], 1):
+                    emoji_id = int(r.emoji)
                     prefix = f"\n\n{i}. "
-                    placeholder = "\u2B50"
+                    # Use correct alt emoji or fallback to star
+                    alt_emoji = alt_map.get(emoji_id, "⭐")
 
                     emoji_offset = len(text) + len(prefix)
-                    text += prefix + placeholder
+                    text += prefix + alt_emoji
 
                     entities.append(MessageEntityCustomEmoji(
                         offset=emoji_offset,
-                        length=1,
-                        document_id=int(r.emoji)
+                        length=len(alt_emoji),
+                        document_id=emoji_id
                     ))
 
-                # User client sends to bot (not to chat_id which is user's ID from bot's view)
+                # User client sends to bot
                 await _user_client.send_message(
                     _bot_username,
                     text,
