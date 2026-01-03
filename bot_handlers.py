@@ -23,6 +23,7 @@ from models import Reply, Settings, Schedule
 _owner_id: int | None = None
 _owner_username: str | None = None
 _user_client = None  # User client for sending custom emojis
+_bot_username: str | None = None  # Bot username for user client to send messages
 
 
 def set_owner_id(user_id: int) -> None:
@@ -37,6 +38,13 @@ def set_owner_username(username: str) -> None:
     global _owner_username
     _owner_username = username.lower().lstrip('@')
     logger.info(f"Bot owner username set to: {_owner_username}")
+
+
+def set_bot_username(username: str) -> None:
+    """Set the bot username for user client to send messages."""
+    global _bot_username
+    _bot_username = username
+    logger.info(f"Bot username set to: {_bot_username}")
 
 
 def get_owner_id() -> int | None:
@@ -284,7 +292,7 @@ def register_bot_handlers(bot, user_client=None):
         buttons.append([Button.inline("« Назад", b"replies")])
 
         # Try to send custom emojis via user client
-        if _user_client:
+        if _user_client and _bot_username:
             try:
                 # Build text with custom emojis
                 text = "📝 Выберите автоответ:"
@@ -303,11 +311,9 @@ def register_bot_handlers(bot, user_client=None):
                         document_id=int(r.emoji)
                     ))
 
-                chat_id = event.chat_id
-
-                # User client sends emoji list (no buttons - only bots can do that)
+                # User client sends to bot (not to chat_id which is user's ID from bot's view)
                 await _user_client.send_message(
-                    chat_id,
+                    _bot_username,
                     text,
                     formatting_entities=entities
                 )

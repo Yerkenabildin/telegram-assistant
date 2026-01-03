@@ -19,7 +19,7 @@ from logging_config import logger
 from models import Reply, Settings, Schedule
 from routes import register_routes
 from handlers import register_handlers
-from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username
+from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username, set_bot_username
 from telethon.tl.functions.account import UpdateEmojiStatusRequest
 from telethon.tl.types import EmojiStatus
 
@@ -192,6 +192,11 @@ async def run_telethon():
 
         if bot.is_connected() and await bot.is_user_authorized():
             try:
+                # Set bot username for user client to send messages
+                bot_me = await bot.get_me()
+                if bot_me.username:
+                    set_bot_username(bot_me.username)
+
                 from bot_handlers import get_main_menu_keyboard
                 await bot.send_message(
                     me.id,
