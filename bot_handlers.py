@@ -183,7 +183,7 @@ def register_bot_handlers(bot):
         current_emoji_id = Schedule.get_current_emoji_id()
 
         # Get replies count
-        replies = Reply().getBy()
+        replies = Reply().select()
         replies_count = len(replies) if replies else 0
 
         # Get meeting status
@@ -233,7 +233,7 @@ def register_bot_handlers(bot):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        replies = Reply().getBy()
+        replies = Reply().select()
 
         if not replies:
             await event.edit(
