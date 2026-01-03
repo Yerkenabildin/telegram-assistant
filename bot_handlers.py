@@ -270,20 +270,41 @@ def register_bot_handlers(bot):
             )
             return
 
-        # Build buttons for each reply (limit to 8 for UI)
+        # Build message text with custom emojis and buttons
+        # Format: "1. ⭐ (emoji_id)\n2. ⭐ (emoji_id)\n..."
+        lines = ["📝 **Выберите автоответ:**\n"]
+        entities = []
         buttons = []
-        for r in replies[:8]:
+
+        for i, r in enumerate(replies[:8], 1):
             emoji_id = r.emoji
-            # Button text: emoji placeholder + ID
-            btn_text = f"📝 {emoji_id}"
-            buttons.append([Button.inline(btn_text, f"reply_view:{emoji_id}".encode())])
+            # Build line: "1. ⭐ (id)"
+            prefix = f"{i}. "
+            placeholder = "⭐"  # Will be replaced with custom emoji
+            suffix = f" ({emoji_id})"
+
+            line_start = sum(len(line) + 1 for line in lines)  # +1 for newline
+            emoji_offset = line_start + len(prefix)
+
+            lines.append(f"{prefix}{placeholder}{suffix}")
+
+            # Add custom emoji entity
+            entities.append(MessageEntityCustomEmoji(
+                offset=emoji_offset,
+                length=len(placeholder),
+                document_id=int(emoji_id)
+            ))
+
+            # Button just shows number
+            buttons.append([Button.inline(f"{i}", f"reply_view:{emoji_id}".encode())])
 
         if len(replies) > 8:
             buttons.append([Button.inline(f"... ещё {len(replies) - 8}", b"replies_list")])
 
         buttons.append([Button.inline("« Назад", b"replies")])
 
-        await event.edit("📝 **Выберите автоответ:**", buttons=buttons)
+        text = "\n".join(lines)
+        await event.edit(text, formatting_entities=entities, buttons=buttons)
 
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
     async def reply_view(event):
