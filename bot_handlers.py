@@ -355,7 +355,7 @@ def register_bot_handlers(bot, user_client=None):
             await event.edit(
                 "🔢 **Авторизация - Шаг 2/3**\n\n"
                 f"Код отправлен на номер `{state['phone']}`\n\n"
-                "Введите код подтверждения:",
+                "**Скопируйте всё сообщение** с кодом и отправьте его сюда.",
                 buttons=[
                     [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
                     [Button.inline("❌ Отмена", b"auth_cancel")],
@@ -1016,11 +1016,12 @@ def register_bot_handlers(bot, user_client=None):
                     await event.respond(
                         "🔢 **Авторизация - Шаг 2/3**\n\n"
                         f"Код отправлен на номер `{phone}`\n\n"
-                        "Введите код подтверждения:",
+                        "**Скопируйте всё сообщение** с кодом и отправьте его сюда.\n"
+                        "Бот сам извлечёт код из текста.",
                         buttons=Button.clear()
                     )
                     await event.respond(
-                        "👆 Введите код из Telegram:",
+                        "👆 Скопируйте сообщение с кодом целиком:",
                         buttons=[
                             [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
                             [Button.inline("❌ Отмена", b"auth_cancel")],
@@ -1037,7 +1038,13 @@ def register_bot_handlers(bot, user_client=None):
 
             # Step 2: Verification code input
             elif state.get('step') == 'code':
-                code = text.replace(' ', '').replace('-', '')
+                # Try to extract code from message (handles forwarded messages)
+                import re
+                code_match = re.search(r'\b(\d{5,6})\b', text)
+                if code_match:
+                    code = code_match.group(1)
+                else:
+                    code = text.replace(' ', '').replace('-', '')
 
                 try:
                     await _user_client.sign_in(
