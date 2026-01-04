@@ -45,16 +45,19 @@ This is a Telegram auto-responder bot that:
 └───────────────────────────────────────┘
 ```
 
-The application runs two async services concurrently via `asyncio.gather()`:
+The application runs up to three async services concurrently via `asyncio.gather()`:
 1. **Hypercorn/Quart web server** (port 5050): Handles Telegram authentication flow via web UI
-2. **Telethon client**: Monitors incoming/outgoing messages and sends auto-replies
+2. **Telethon user client**: Monitors incoming/outgoing messages and sends auto-replies
+3. **Telethon bot client** (optional): Provides inline keyboard interface for control
 
 ### Key Components
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `main.py` | ~461 | Entry point, Quart routes, Telethon event handlers |
-| `models.py` | ~99 | SQLite ORM models (Reply, Settings) using sqlitemodel |
+| `main.py` | ~250 | Entry point, orchestrates all services |
+| `handlers.py` | ~700 | User client event handlers (commands, auto-reply) |
+| `bot_handlers.py` | ~400 | Bot client handlers with inline keyboards |
+| `models.py` | ~99 | SQLite ORM models (Reply, Settings, Schedule) |
 | `templates/` | 4 files | HTML templates for auth flow (phone, code, 2fa, success) |
 | `./storage/` | - | Persistent data directory (session file, database) |
 
@@ -115,6 +118,7 @@ docker logs -f telegram-assistant
 | `SCRIPT_NAME` | NO | - | Reverse proxy path prefix |
 | `TIMEZONE` | NO | `Europe/Moscow` | Timezone for schedule (e.g., `Europe/Moscow`, `UTC`) |
 | `MEETING_API_TOKEN` | NO | - | API token for `/api/meeting` endpoint (if not set, no auth required) |
+| `BOT_TOKEN` | NO | - | Telegram bot token from @BotFather for control interface |
 
 ## Event Handlers
 
@@ -166,6 +170,32 @@ curl -X POST "http://localhost:5050/api/meeting?action=start&token=your-token"
 ```
 
 Priority: Meeting (50) is above Work (10) but below Override (100), so vacation status won't be overwritten.
+
+## Bot Control Interface
+
+Optional Telegram bot with inline keyboard interface. Requires `BOT_TOKEN` environment variable.
+
+### Setup
+1. Create a bot via [@BotFather](https://t.me/BotFather)
+2. Get the bot token
+3. Set `BOT_TOKEN` environment variable
+4. Start the application - bot will run alongside the user client
+
+### Features
+The bot responds only to the authorized user (owner of the user client session).
+
+**Main Menu** (`/start`):
+- 📊 **Статус** - View current status (schedule, replies count, meeting)
+- 📝 **Автоответы** - Manage auto-replies (list, add via emoji + text)
+- 📅 **Расписание** - Schedule management (list, enable/disable, clear)
+- 📞 **Встречи** - Meeting control (start/end call)
+- ⚙️ **Настройки** - Settings (disable autoreply)
+
+### Adding Auto-Reply via Bot
+1. Send a custom emoji to the bot
+2. Bot asks for reply text
+3. Send the reply message
+4. Auto-reply is saved for that emoji status
 
 7. **Meeting commands**: Configure meeting emoji for Zoom/calls integration (outgoing, only in settings chat)
    - `/meeting` - Show current meeting emoji settings

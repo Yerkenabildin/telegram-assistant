@@ -5,6 +5,8 @@ Main entry point that runs:
 - Quart web server for authentication
 - Telethon client for message handling
 """
+from __future__ import annotations
+
 import asyncio
 
 import hypercorn
@@ -17,6 +19,7 @@ from logging_config import logger
 from models import Reply, Settings, Schedule
 from routes import register_routes
 from handlers import register_handlers
+from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username, set_bot_username
 from telethon.tl.functions.account import UpdateEmojiStatusRequest
 from telethon.tl.types import EmojiStatus
 
@@ -42,6 +45,13 @@ def create_client() -> TelegramClient:
     return TelegramClient(config.session_path, config.api_id, config.api_hash)
 
 
+def create_bot() -> TelegramClient | None:
+    """Create the Telethon bot client if BOT_TOKEN is configured."""
+    if not config.bot_token:
+        return None
+    return TelegramClient('bot', config.api_id, config.api_hash)
+
+
 class PrefixMiddleware:
     """ASGI middleware to handle SCRIPT_NAME for reverse proxy."""
 
@@ -61,10 +71,15 @@ class PrefixMiddleware:
 
 app = create_app()
 client = create_client()
+bot = create_bot()
 
 # Register routes and handlers
 register_routes(app, client)
 register_handlers(client)
+
+# Register bot handlers if bot is configured
+if bot:
+    register_bot_handlers(bot, client)
 
 
 # =============================================================================
@@ -82,9 +97,11 @@ async def startup():
 
 @app.after_serving
 async def cleanup():
-    """Disconnect Telethon client on shutdown."""
+    """Disconnect Telethon clients on shutdown."""
     await client.disconnect()
-    logger.info("Telethon client disconnected")
+    if bot:
+        await bot.disconnect()
+    logger.info("Telethon clients disconnected")
 
 
 # =============================================================================
@@ -158,7 +175,38 @@ async def run_telethon():
         logger.info("Waiting for authorization...")
         await asyncio.sleep(3)
 
-    logger.info("Telethon client authorized, starting event loop")
+    # Set owner ID and username for bot access control
+    me = await client.get_me()
+    set_owner_id(me.id)
+    if me.username:
+        set_owner_username(me.username)
+    logger.info(f"Telethon client authorized as {me.id} (@{me.username}), starting event loop")
+
+    # Send welcome message via bot if configured
+    if bot:
+        # Wait for bot to be ready (max 10 seconds)
+        for _ in range(20):
+            if bot.is_connected() and await bot.is_user_authorized():
+                break
+            await asyncio.sleep(0.5)
+
+        if bot.is_connected() and await bot.is_user_authorized():
+            try:
+                # Set bot username for user client to send messages
+                bot_me = await bot.get_me()
+                if bot_me.username:
+                    set_bot_username(bot_me.username)
+
+                from bot_handlers import get_main_menu_keyboard
+                await bot.send_message(
+                    me.id,
+                    "🤖 **Панель управления автоответчиком**\n\n"
+                    "Бот готов к работе! Выберите раздел:",
+                    buttons=get_main_menu_keyboard()
+                )
+                logger.info("Welcome message sent to owner")
+            except Exception as e:
+                logger.warning(f"Failed to send welcome message: {e}")
 
     # Start schedule checker as a background task
     asyncio.create_task(schedule_checker())
@@ -166,22 +214,42 @@ async def run_telethon():
     await client.run_until_disconnected()
 
 
+async def run_bot():
+    """Run the Telegram bot client."""
+    if not bot:
+        return
+
+    logger.info("Starting bot client...")
+    await bot.start(bot_token=config.bot_token)
+    logger.info("Bot client started")
+
+    await bot.run_until_disconnected()
+
+
 async def main():
-    """Run both web server and Telethon client concurrently."""
+    """Run web server, Telethon client, and bot concurrently."""
     try:
         logger.info("Starting application...")
 
         hypercorn_config = HypercornConfig()
         hypercorn_config.bind = [f"{config.host}:{config.port}"]
 
-        await asyncio.gather(
+        tasks = [
             hypercorn.asyncio.serve(app, hypercorn_config),
-            run_telethon()
-        )
+            run_telethon(),
+        ]
+
+        # Add bot if configured
+        if bot:
+            tasks.append(run_bot())
+
+        await asyncio.gather(*tasks)
     except asyncio.CancelledError:
         logger.info("Application shutting down...")
     finally:
         await client.disconnect()
+        if bot:
+            await bot.disconnect()
         logger.info("Cleanup complete")
 
 
@@ -197,6 +265,7 @@ if __name__ == '__main__':
     logger.info(f"API_ID: {config.api_id}")
     logger.info(f"Port: {config.port}")
     logger.info(f"Script name: {config.script_name or '(none)'}")
+    logger.info(f"Bot: {'enabled' if config.bot_token else 'disabled'}")
     logger.info("==========================")
 
     try:
