@@ -13,6 +13,7 @@ import hypercorn
 from hypercorn.config import Config as HypercornConfig
 from quart import Quart
 from telethon.sync import TelegramClient
+from telethon.errors import AuthKeyUnregisteredError
 
 from config import config
 from logging_config import logger
@@ -191,7 +192,17 @@ async def run_telethon():
     # Start background task to detect when auth is complete
     asyncio.create_task(_wait_for_auth())
 
-    await client.run_until_disconnected()
+    # Run client with reconnection on auth errors (e.g., after logout)
+    while True:
+        try:
+            await client.run_until_disconnected()
+            break  # Normal exit
+        except AuthKeyUnregisteredError:
+            # Session invalidated (e.g., after logout) - reconnect and wait for new auth
+            logger.info("Session invalidated. Reconnecting and waiting for new authentication...")
+            if not client.is_connected():
+                await client.connect()
+            await asyncio.sleep(2)  # Brief pause before retry
 
 
 async def _wait_for_auth():
