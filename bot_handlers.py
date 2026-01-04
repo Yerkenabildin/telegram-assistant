@@ -363,7 +363,17 @@ def register_bot_handlers(bot, user_client=None):
             )
         except Exception as e:
             logger.error(f"Failed to resend code: {e}")
-            await event.answer(f"❌ Ошибка: {e}", alert=True)
+            # Show short message in popup, full error in chat
+            await event.answer("❌ Не удалось отправить код", alert=True)
+            await event.edit(
+                f"❌ **Ошибка отправки кода**\n\n"
+                f"{str(e)[:200]}\n\n"
+                "Подождите несколько минут и попробуйте снова.",
+                buttons=[
+                    [Button.inline("🔄 Попробовать снова", b"auth_resend")],
+                    [Button.inline("❌ Отмена", b"auth_cancel")],
+                ]
+            )
 
     # =========================================================================
     # Status
