@@ -13,6 +13,7 @@ import hypercorn
 from hypercorn.config import Config as HypercornConfig
 from quart import Quart
 from telethon.sync import TelegramClient
+from telethon.errors import AuthKeyUnregisteredError
 
 from config import config
 from logging_config import logger
@@ -171,47 +172,105 @@ async def run_telethon():
     await client.connect()
     logger.info("Telethon client connected")
 
-    while not await client.is_user_authorized():
-        logger.info("Waiting for authorization...")
-        await asyncio.sleep(3)
+    # Check if already authorized
+    if await client.is_user_authorized():
+        # Set owner ID and username for bot access control
+        me = await client.get_me()
+        set_owner_id(me.id)
+        if me.username:
+            set_owner_username(me.username)
+        logger.info(f"Telethon client authorized as {me.id} (@{me.username})")
 
-    # Set owner ID and username for bot access control
-    me = await client.get_me()
-    set_owner_id(me.id)
-    if me.username:
-        set_owner_username(me.username)
-    logger.info(f"Telethon client authorized as {me.id} (@{me.username}), starting event loop")
-
-    # Send welcome message via bot if configured
-    if bot:
-        # Wait for bot to be ready (max 10 seconds)
-        for _ in range(20):
-            if bot.is_connected() and await bot.is_user_authorized():
-                break
-            await asyncio.sleep(0.5)
-
-        if bot.is_connected() and await bot.is_user_authorized():
-            try:
-                # Set bot username for user client to send messages
-                bot_me = await bot.get_me()
-                if bot_me.username:
-                    set_bot_username(bot_me.username)
-
-                from bot_handlers import get_main_menu_keyboard
-                await bot.send_message(
-                    me.id,
-                    "🤖 **Панель управления автоответчиком**\n\n"
-                    "Бот готов к работе! Выберите раздел:",
-                    buttons=get_main_menu_keyboard()
-                )
-                logger.info("Welcome message sent to owner")
-            except Exception as e:
-                logger.warning(f"Failed to send welcome message: {e}")
+        # Send welcome message via bot if configured
+        await _send_welcome_message()
+    else:
+        logger.info("Telethon client not authorized. Waiting for authentication via bot...")
 
     # Start schedule checker as a background task
     asyncio.create_task(schedule_checker())
 
-    await client.run_until_disconnected()
+    # Start background task to detect when auth is complete
+    asyncio.create_task(_wait_for_auth())
+
+    # Run client with reconnection on auth errors (e.g., after logout)
+    while True:
+        try:
+            # Only run event loop if authorized, otherwise just wait
+            if await client.is_user_authorized():
+                await client.run_until_disconnected()
+                break  # Normal exit
+            else:
+                # Not authorized - wait for bot-based auth
+                await asyncio.sleep(5)
+        except AuthKeyUnregisteredError:
+            # Session invalidated (e.g., after logout) - delete session and reconnect
+            logger.info("Session invalidated. Cleaning up and waiting for new authentication...")
+
+            # Delete invalid session file
+            import os
+            session_file = config.session_path + '.session'
+            if os.path.exists(session_file):
+                try:
+                    os.remove(session_file)
+                    logger.info(f"Invalid session file deleted: {session_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete session file: {e}")
+
+            # Reconnect with fresh session
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            await client.connect()
+            await asyncio.sleep(2)
+
+
+async def _wait_for_auth():
+    """Background task that waits for authorization and sends welcome message."""
+    # Only run if not already authorized
+    if await client.is_user_authorized():
+        return
+
+    while True:
+        await asyncio.sleep(2)
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            logger.info(f"Telethon client now authorized as {me.id} (@{me.username})")
+            await _send_welcome_message()
+            break
+
+
+async def _send_welcome_message():
+    """Send welcome message via bot if configured."""
+    if not bot:
+        return
+
+    # Wait for bot to be ready (max 10 seconds)
+    for _ in range(20):
+        if bot.is_connected() and await bot.is_user_authorized():
+            break
+        await asyncio.sleep(0.5)
+
+    if not (bot.is_connected() and await bot.is_user_authorized()):
+        return
+
+    try:
+        # Set bot username for user client to send messages
+        bot_me = await bot.get_me()
+        if bot_me.username:
+            set_bot_username(bot_me.username)
+
+        me = await client.get_me()
+        from bot_handlers import get_main_menu_keyboard
+        await bot.send_message(
+            me.id,
+            "🤖 **Панель управления автоответчиком**\n\n"
+            "Бот готов к работе! Выберите раздел:",
+            buttons=get_main_menu_keyboard()
+        )
+        logger.info("Welcome message sent to owner")
+    except Exception as e:
+        logger.warning(f"Failed to send welcome message: {e}")
 
 
 async def run_bot():
@@ -266,6 +325,8 @@ if __name__ == '__main__':
     logger.info(f"Port: {config.port}")
     logger.info(f"Script name: {config.script_name or '(none)'}")
     logger.info(f"Bot: {'enabled' if config.bot_token else 'disabled'}")
+    if config.allowed_username:
+        logger.info(f"Allowed username: @{config.allowed_username}")
     logger.info("==========================")
 
     try:

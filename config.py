@@ -61,6 +61,12 @@ class Config:
         default_factory=lambda: os.environ.get('BOT_TOKEN') or None
     )
 
+    # Allowed username for bot authentication (optional, if not set - no restriction)
+    # Only this username can authenticate via bot
+    allowed_username: Optional[str] = field(
+        default_factory=lambda: os.environ.get('ALLOWED_USERNAME') or None
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
