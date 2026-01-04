@@ -144,17 +144,9 @@ def get_replies_keyboard():
 def get_reply_view_keyboard(emoji_id: str):
     """Keyboard for viewing a specific reply."""
     return [
-        [Button.inline("✏️ Изменить", f"reply_edit:{emoji_id}".encode())],
+        [Button.inline("💾 Сохранить", f"reply_save:{emoji_id}".encode())],
         [Button.inline("🗑 Удалить", f"reply_del_confirm:{emoji_id}".encode())],
         [Button.inline("« Назад", b"replies_list")],
-    ]
-
-
-def get_reply_edit_confirm_keyboard(emoji_id: str):
-    """Keyboard for confirming reply edit."""
-    return [
-        [Button.inline("✅ Да", f"reply_edit_yes:{emoji_id}".encode()),
-         Button.inline("❌ Нет", f"reply_view:{emoji_id}".encode())],
     ]
 
 
@@ -374,7 +366,7 @@ def register_bot_handlers(bot, user_client=None):
 
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
     async def reply_view(event):
-        """View a specific reply."""
+        """View a specific reply - show actual reply text via user client."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
@@ -386,119 +378,71 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("❌ Автоответ не найден", alert=True)
             return
 
-        # Edit user client message to show selected emoji
+        # Get stored message
+        msg = reply.message
+
+        # Show actual reply content via user client
         global _emoji_list_message_id
-        if _user_client and _bot_username and _emoji_list_message_id:
+        if _user_client and _bot_username and _emoji_list_message_id and msg:
             try:
-                # Get emoji alt text
-                docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=[int(emoji_id)]))
-                alt_emoji = "⭐"
-                for doc in docs:
-                    for attr in doc.attributes:
-                        if isinstance(attr, DocumentAttributeCustomEmoji):
-                            alt_emoji = attr.alt
-                            break
-
-                # Build "selected" message with custom emoji
-                text = "✅ Выбран: "
-                emoji_offset = len(text)
-                text += alt_emoji
-
-                entities = [MessageEntityCustomEmoji(
-                    offset=emoji_offset,
-                    length=len(alt_emoji),
-                    document_id=int(emoji_id)
-                )]
+                # Send the actual reply text with its entities
+                reply_text = msg.text or msg.message or "(пустое сообщение)"
+                reply_entities = msg.entities or []
 
                 await _user_client.edit_message(
                     _bot_username,
                     _emoji_list_message_id,
-                    text,
-                    formatting_entities=entities
+                    reply_text,
+                    formatting_entities=reply_entities
                 )
             except Exception as e:
                 logger.warning(f"Failed to edit user client message: {e}")
 
-        # Get message info
-        msg = reply.message
-        if msg is None:
-            text_preview = "(ошибка чтения сообщения)"
-        elif msg.text:
-            text_preview = msg.text[:200]
-            if len(msg.text) > 200:
-                text_preview += "..."
-        elif msg.message:  # Alternative field name
-            text_preview = msg.message[:200]
-            if len(msg.message) > 200:
-                text_preview += "..."
-        else:
-            # Check for media
-            if msg.media:
-                text_preview = "(медиа-сообщение без текста)"
-            else:
-                text_preview = "(пустое сообщение)"
-
         await event.edit(
-            f"📝 **Автоответ**\n\n"
-            f"**Emoji ID:** `{emoji_id}`\n\n"
-            f"**Текст:**\n{text_preview}",
+            f"📝 **Автоответ для emoji** `{emoji_id}`\n\n"
+            "⬆️ Отредактируйте сообщение выше и нажмите «Сохранить»",
             buttons=get_reply_view_keyboard(emoji_id)
         )
 
-    @bot.on(events.CallbackQuery(pattern=b"reply_edit:(.+)"))
-    async def reply_edit_start(event):
-        """Start editing a reply - ask for new text."""
+    @bot.on(events.CallbackQuery(pattern=b"reply_save:(.+)"))
+    async def reply_save(event):
+        """Save the edited reply from user client message."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
         emoji_id = event.pattern_match.group(1).decode()
 
-        # Store pending edit state
-        _pending_reply_edit[event.sender_id] = {'emoji_id': emoji_id, 'message': None}
-
-        await event.edit(
-            f"✏️ **Редактирование автоответа**\n\n"
-            f"**Emoji ID:** `{emoji_id}`\n\n"
-            f"Отправьте новый текст автоответа:",
-            buttons=[[Button.inline("❌ Отмена", f"reply_view:{emoji_id}".encode())]]
-        )
-
-    @bot.on(events.CallbackQuery(pattern=b"reply_edit_yes:(.+)"))
-    async def reply_edit_confirm(event):
-        """Confirm and save the edited reply."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        # Fetch the user client message to get edited content
+        if not _user_client or not _bot_username or not _emoji_list_message_id:
+            await event.answer("❌ Ошибка: сообщение не найдено", alert=True)
             return
 
-        emoji_id = event.pattern_match.group(1).decode()
+        try:
+            # Get the message from the chat
+            messages = await _user_client.get_messages(_bot_username, ids=_emoji_list_message_id)
+            if not messages:
+                await event.answer("❌ Сообщение не найдено", alert=True)
+                return
 
-        # Get pending edit
-        pending = _pending_reply_edit.get(event.sender_id)
-        if not pending or pending['emoji_id'] != emoji_id or not pending['message']:
-            await event.answer("❌ Ошибка: нет данных для сохранения", alert=True)
-            return
+            edited_msg = messages
 
-        # Save the reply
-        Reply.create(emoji_id, pending['message'])
-        del _pending_reply_edit[event.sender_id]
-        logger.info(f"Reply updated for emoji {emoji_id} via bot")
+            # Save the reply
+            Reply.create(emoji_id, edited_msg)
+            logger.info(f"Reply saved for emoji {emoji_id} via bot")
 
-        await event.answer("✅ Автоответ сохранён")
+            await event.answer("✅ Автоответ сохранён!")
 
-        # Show updated reply
-        reply = Reply.get_by_emoji(emoji_id)
-        msg = reply.message
-        text_preview = msg.text[:200] if msg and msg.text else "(нет текста)"
-        if msg and msg.text and len(msg.text) > 200:
-            text_preview += "..."
-
-        await event.edit(
-            f"📝 **Автоответ**\n\n"
-            f"**Emoji ID:** `{emoji_id}`\n\n"
-            f"**Текст:**\n{text_preview}",
-            buttons=get_reply_view_keyboard(emoji_id)
-        )
+            # Stay on the same screen
+            await event.edit(
+                f"📝 **Автоответ для emoji** `{emoji_id}`\n\n"
+                "✅ Сохранено!\n\n"
+                "⬆️ Отредактируйте сообщение выше и нажмите «Сохранить»",
+                buttons=get_reply_view_keyboard(emoji_id)
+            )
+        except Exception as e:
+            logger.error(f"Failed to save reply: {e}")
+            await event.answer(f"❌ Ошибка сохранения: {e}", alert=True)
 
     @bot.on(events.CallbackQuery(pattern=b"reply_del_confirm:(.+)"))
     async def reply_delete_confirm(event):
@@ -774,37 +718,15 @@ def register_bot_handlers(bot, user_client=None):
 
     # Store pending reply setup: {user_id: emoji_id}
     _pending_reply_setup: dict[int, int] = {}
-    # Store pending reply edit: {user_id: {'emoji_id': str, 'message': Message}}
-    _pending_reply_edit: dict[int, dict] = {}
 
     @bot.on(events.NewMessage(func=lambda e: e.is_private))
     async def handle_private_message(event):
-        """Handle private messages for reply setup and editing."""
+        """Handle private messages for reply setup."""
         if not await _is_owner(event):
             return
 
         # Skip commands
         if event.message.text and event.message.text.startswith('/'):
-            return
-
-        # Check if we're editing an existing reply
-        if event.sender_id in _pending_reply_edit:
-            pending = _pending_reply_edit[event.sender_id]
-            emoji_id = pending['emoji_id']
-            pending['message'] = event.message
-
-            # Preview and ask for confirmation
-            text_preview = event.message.text[:200] if event.message.text else "(нет текста)"
-            if event.message.text and len(event.message.text) > 200:
-                text_preview += "..."
-
-            await event.respond(
-                f"✏️ **Подтверждение изменения**\n\n"
-                f"**Emoji ID:** `{emoji_id}`\n\n"
-                f"**Новый текст:**\n{text_preview}\n\n"
-                f"Сохранить изменения?",
-                buttons=get_reply_edit_confirm_keyboard(emoji_id)
-            )
             return
 
         # Check if message contains custom emoji (new reply setup)
@@ -846,8 +768,6 @@ def register_bot_handlers(bot, user_client=None):
 
         if event.sender_id in _pending_reply_setup:
             del _pending_reply_setup[event.sender_id]
-        if event.sender_id in _pending_reply_edit:
-            del _pending_reply_edit[event.sender_id]
 
         await event.edit(
             "❌ Настройка автоответа отменена.",
