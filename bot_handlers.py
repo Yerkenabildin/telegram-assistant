@@ -893,11 +893,26 @@ def register_bot_handlers(bot, user_client=None):
         _owner_id = None
         _owner_username = None
 
+        # Disconnect client
+        try:
+            await _user_client.disconnect()
+        except Exception as e:
+            logger.warning(f"Disconnect error: {e}")
+
+        # Delete session file to allow fresh authentication
+        import os
+        session_file = config.session_path + '.session'
+        if os.path.exists(session_file):
+            try:
+                os.remove(session_file)
+                logger.info(f"Session file deleted: {session_file}")
+            except Exception as e:
+                logger.warning(f"Failed to delete session file: {e}")
+
         # Reconnect client for future auth
         try:
-            if not _user_client.is_connected():
-                await _user_client.connect()
-                logger.info("User client reconnected after logout")
+            await _user_client.connect()
+            logger.info("User client reconnected after logout")
         except Exception as e:
             logger.warning(f"Failed to reconnect after logout: {e}")
 
