@@ -142,6 +142,7 @@ def get_replies_keyboard():
     """Replies management keyboard."""
     return [
         [Button.inline("📋 Список автоответов", b"replies_list")],
+        [Button.inline("➕ Добавить", b"reply_add")],
         [Button.inline("« Назад", b"main")],
     ]
 
@@ -266,6 +267,9 @@ def register_bot_handlers(bot, user_client=None):
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
+
+        # Clear add mode when returning to menu
+        _pending_reply_add_mode.discard(event.sender_id)
 
         # Delete emoji list message when returning to menu
         await _delete_emoji_list_message()
@@ -724,6 +728,25 @@ def register_bot_handlers(bot, user_client=None):
 
     # Store pending reply setup: {user_id: emoji_id}
     _pending_reply_setup: dict[int, int] = {}
+    # Store users in "add mode" waiting for emoji
+    _pending_reply_add_mode: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"reply_add"))
+    async def reply_add_start(event):
+        """Start adding a new reply - wait for emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        # Enable add mode for this user
+        _pending_reply_add_mode.add(event.sender_id)
+
+        await event.edit(
+            "➕ **Добавить автоответ**\n\n"
+            "Отправьте сообщение с эмодзи-статусом,\n"
+            "для которого хотите настроить автоответ.",
+            buttons=[[Button.inline("❌ Отмена", b"replies")]]
+        )
 
     @bot.on(events.NewMessage(func=lambda e: e.is_private))
     async def handle_private_message(event):
@@ -750,22 +773,24 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
-        # Check if message contains custom emoji (new reply setup)
-        entities = event.message.entities or []
-        custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+        # Check if user is in "add mode" and message contains custom emoji
+        if event.sender_id in _pending_reply_add_mode:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
 
-        if custom_emojis:
-            # User sent emoji - store it for reply setup
-            emoji_id = custom_emojis[0].document_id
-            _pending_reply_setup[event.sender_id] = emoji_id
+            if custom_emojis:
+                # User sent emoji - store it for reply setup
+                _pending_reply_add_mode.discard(event.sender_id)
+                emoji_id = custom_emojis[0].document_id
+                _pending_reply_setup[event.sender_id] = emoji_id
 
-            await event.respond(
-                f"📝 Эмодзи выбран: `{emoji_id}`\n\n"
-                "Теперь отправьте текст автоответа для этого статуса.\n"
-                "Или нажмите кнопку для отмены.",
-                buttons=[[Button.inline("❌ Отмена", b"cancel_reply_setup")]]
-            )
-            return
+                await event.respond(
+                    f"📝 Эмодзи выбран: `{emoji_id}`\n\n"
+                    "Теперь отправьте текст автоответа для этого статуса.\n"
+                    "Или нажмите кнопку для отмены.",
+                    buttons=[[Button.inline("❌ Отмена", b"cancel_reply_setup")]]
+                )
+                return
 
     @bot.on(events.CallbackQuery(data=b"cancel_reply_setup"))
     async def cancel_reply_setup(event):
@@ -773,6 +798,8 @@ def register_bot_handlers(bot, user_client=None):
         if not await _is_owner(event):
             return
 
+        # Clear both add mode and pending setup
+        _pending_reply_add_mode.discard(event.sender_id)
         if event.sender_id in _pending_reply_setup:
             del _pending_reply_setup[event.sender_id]
 
