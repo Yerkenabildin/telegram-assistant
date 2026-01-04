@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomEmoji
-from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest
+from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest, DeleteHistoryRequest
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
 from sqlitemodel import SQL
@@ -237,11 +237,13 @@ def register_bot_handlers(bot, user_client=None):
         if not _user_client or not _bot_username:
             return
         try:
-            # Get all messages from chat with bot and delete them
-            messages = await _user_client.get_messages(_bot_username, limit=100)
-            if messages:
-                await _user_client.delete_messages(_bot_username, messages)
-                logger.info(f"Cleared {len(messages)} messages from bot chat after auth")
+            bot_entity = await _user_client.get_input_entity(_bot_username)
+            await _user_client(DeleteHistoryRequest(
+                peer=bot_entity,
+                max_id=0,  # Delete all messages
+                revoke=True  # Delete for both sides
+            ))
+            logger.info("Cleared bot chat history after auth")
         except Exception as e:
             logger.warning(f"Failed to clear bot chat history: {e}")
 
