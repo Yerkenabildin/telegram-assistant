@@ -44,6 +44,10 @@ def register_handlers(client):
         if not event.is_private:
             return
 
+        sender = await event.get_sender()
+        if getattr(sender, 'bot', False):
+            return
+
         me = await client.get_me()
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
 
@@ -54,7 +58,6 @@ def register_handlers(client):
         ):
             return
 
-        sender = await event.get_sender()
         sender_username = getattr(sender, 'username', None)
         sender_id = getattr(sender, 'id', 0)
 
@@ -83,12 +86,15 @@ def register_handlers(client):
         if not event.is_private:
             return
 
+        sender = await event.get_sender()
+        if getattr(sender, 'bot', False):
+            return
+
         me = await client.get_me()
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
 
         reply = Reply.get_by_emoji(emoji_status_id) if emoji_status_id else None
 
-        sender = await event.get_sender()
         sender_username = getattr(sender, 'username', None)
         sender_id = getattr(sender, 'id', 0)
 
