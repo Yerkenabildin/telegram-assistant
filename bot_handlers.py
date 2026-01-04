@@ -305,11 +305,20 @@ def register_bot_handlers(bot, user_client=None):
         # Initialize auth state
         _auth_state[event.sender_id] = {'step': 'phone'}
 
+        # Edit current message
         await event.edit(
             "📱 **Авторизация - Шаг 1/3**\n\n"
-            "Введите номер телефона в международном формате:\n"
-            "Например: `+79001234567`",
-            buttons=get_auth_cancel_keyboard()
+            "Нажмите кнопку ниже, чтобы отправить номер телефона,\n"
+            "или введите его вручную в формате: `+79001234567`"
+        )
+
+        # Send new message with phone request button (ReplyKeyboard)
+        await event.respond(
+            "👇 Нажмите кнопку для отправки номера:",
+            buttons=[
+                [Button.request_phone("📲 Отправить номер телефона")],
+                [Button.text("❌ Отмена")]
+            ]
         )
 
     @bot.on(events.CallbackQuery(data=b"auth_cancel"))
@@ -966,11 +975,27 @@ def register_bot_handlers(bot, user_client=None):
             state = _auth_state[event.sender_id]
             text = event.message.text.strip() if event.message.text else ""
 
+            # Handle cancel button
+            if text == "❌ Отмена":
+                del _auth_state[event.sender_id]
+                await event.respond(
+                    "❌ **Авторизация отменена**\n\n"
+                    "Нажмите /start чтобы начать заново.",
+                    buttons=Button.clear()
+                )
+                return
+
             # Step 1: Phone number input
             if state.get('step') == 'phone':
-                phone = text
-                if not phone.startswith('+'):
-                    phone = '+' + phone
+                # Check if contact was shared via button
+                if event.message.contact:
+                    phone = event.message.contact.phone_number
+                    if not phone.startswith('+'):
+                        phone = '+' + phone
+                else:
+                    phone = text
+                    if not phone.startswith('+'):
+                        phone = '+' + phone
 
                 try:
                     result = await _user_client.send_code_request(phone)
@@ -982,6 +1007,10 @@ def register_bot_handlers(bot, user_client=None):
                         "🔢 **Авторизация - Шаг 2/3**\n\n"
                         f"Код отправлен на номер `{phone}`\n\n"
                         "Введите код подтверждения:",
+                        buttons=Button.clear()
+                    )
+                    await event.respond(
+                        "👆 Введите код из Telegram:",
                         buttons=[
                             [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
                             [Button.inline("❌ Отмена", b"auth_cancel")],
@@ -992,7 +1021,7 @@ def register_bot_handlers(bot, user_client=None):
                     await event.respond(
                         f"❌ **Ошибка**\n\n{e}\n\n"
                         "Попробуйте ещё раз:",
-                        buttons=get_auth_cancel_keyboard()
+                        buttons=Button.clear()
                     )
                 return
 
