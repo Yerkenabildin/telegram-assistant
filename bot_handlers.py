@@ -315,10 +315,7 @@ def register_bot_handlers(bot, user_client=None):
         # Send new message with phone request button (ReplyKeyboard)
         await event.respond(
             "👇 Нажмите кнопку для отправки номера:",
-            buttons=[
-                [Button.request_phone("📲 Отправить номер телефона")],
-                [Button.text("❌ Отмена")]
-            ]
+            buttons=[[Button.request_phone("📲 Отправить номер телефона")]]
         )
 
     @bot.on(events.CallbackQuery(data=b"auth_cancel"))
