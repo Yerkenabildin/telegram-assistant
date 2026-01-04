@@ -885,19 +885,28 @@ def register_bot_handlers(bot, user_client=None):
 
         try:
             await _user_client.log_out()
-            _owner_id = None
-            _owner_username = None
             logger.info("User logged out via bot")
-
-            await event.edit(
-                "🚪 **Вы вышли из аккаунта**\n\n"
-                "Сессия завершена. Для использования бота\n"
-                "необходимо авторизоваться заново.",
-                buttons=get_auth_keyboard()
-            )
         except Exception as e:
-            logger.error(f"Logout failed: {e}")
-            await event.answer(f"❌ Ошибка: {e}", alert=True)
+            logger.warning(f"Logout error (may be expected): {e}")
+
+        # Clear owner state
+        _owner_id = None
+        _owner_username = None
+
+        # Reconnect client for future auth
+        try:
+            if not _user_client.is_connected():
+                await _user_client.connect()
+                logger.info("User client reconnected after logout")
+        except Exception as e:
+            logger.warning(f"Failed to reconnect after logout: {e}")
+
+        await event.edit(
+            "🚪 **Вы вышли из аккаунта**\n\n"
+            "Сессия завершена. Для использования бота\n"
+            "необходимо авторизоваться заново.",
+            buttons=get_auth_keyboard()
+        )
 
     # =========================================================================
     # Text message handlers for setting replies
