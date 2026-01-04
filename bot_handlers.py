@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomEmoji
-from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest
+from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest, DeleteHistoryRequest
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
 from sqlitemodel import SQL
@@ -231,6 +231,21 @@ def register_bot_handlers(bot, user_client=None):
             except Exception as e:
                 logger.warning(f"Failed to delete emoji list message: {e}")
             _emoji_list_message_id = None
+
+    async def _clear_bot_chat_history():
+        """Delete all messages in chat with bot to remove sensitive auth data."""
+        if not _user_client or not _bot_username:
+            return
+        try:
+            bot_entity = await _user_client.get_input_entity(_bot_username)
+            await _user_client(DeleteHistoryRequest(
+                peer=bot_entity,
+                max_id=0,  # Delete all messages
+                revoke=True  # Delete for both sides
+            ))
+            logger.info("Cleared bot chat history after auth")
+        except Exception as e:
+            logger.warning(f"Failed to clear bot chat history: {e}")
 
     async def _is_user_client_authorized() -> bool:
         """Check if user client is authorized."""
@@ -1069,6 +1084,9 @@ def register_bot_handlers(bot, user_client=None):
 
                     logger.info(f"User authorized via bot: {me.id} (@{me.username})")
 
+                    # Clear chat history to remove sensitive auth data
+                    await _clear_bot_chat_history()
+
                     await event.respond(
                         "✅ **Авторизация успешна!**\n\n"
                         f"Вы авторизованы как: @{me.username or me.id}\n\n"
@@ -1128,6 +1146,9 @@ def register_bot_handlers(bot, user_client=None):
                         set_owner_username(me.username)
 
                     logger.info(f"User authorized via bot (2FA): {me.id} (@{me.username})")
+
+                    # Clear chat history to remove sensitive auth data
+                    await _clear_bot_chat_history()
 
                     await event.respond(
                         "✅ **Авторизация успешна!**\n\n"
