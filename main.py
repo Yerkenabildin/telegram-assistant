@@ -195,14 +195,34 @@ async def run_telethon():
     # Run client with reconnection on auth errors (e.g., after logout)
     while True:
         try:
-            await client.run_until_disconnected()
-            break  # Normal exit
+            # Only run event loop if authorized, otherwise just wait
+            if await client.is_user_authorized():
+                await client.run_until_disconnected()
+                break  # Normal exit
+            else:
+                # Not authorized - wait for bot-based auth
+                await asyncio.sleep(5)
         except AuthKeyUnregisteredError:
-            # Session invalidated (e.g., after logout) - reconnect and wait for new auth
-            logger.info("Session invalidated. Reconnecting and waiting for new authentication...")
-            if not client.is_connected():
-                await client.connect()
-            await asyncio.sleep(2)  # Brief pause before retry
+            # Session invalidated (e.g., after logout) - delete session and reconnect
+            logger.info("Session invalidated. Cleaning up and waiting for new authentication...")
+
+            # Delete invalid session file
+            import os
+            session_file = config.session_path + '.session'
+            if os.path.exists(session_file):
+                try:
+                    os.remove(session_file)
+                    logger.info(f"Invalid session file deleted: {session_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete session file: {e}")
+
+            # Reconnect with fresh session
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            await client.connect()
+            await asyncio.sleep(2)
 
 
 async def _wait_for_auth():
