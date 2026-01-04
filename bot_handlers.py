@@ -355,7 +355,7 @@ def register_bot_handlers(bot, user_client=None):
             await event.edit(
                 "🔢 **Авторизация - Шаг 2/3**\n\n"
                 f"Код отправлен на номер `{state['phone']}`\n\n"
-                "**Скопируйте всё сообщение** с кодом и отправьте его сюда.",
+                "**Скопируйте** или **перешлите** сообщение с кодом сюда.",
                 buttons=[
                     [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
                     [Button.inline("❌ Отмена", b"auth_cancel")],
@@ -1016,12 +1016,12 @@ def register_bot_handlers(bot, user_client=None):
                     await event.respond(
                         "🔢 **Авторизация - Шаг 2/3**\n\n"
                         f"Код отправлен на номер `{phone}`\n\n"
-                        "**Скопируйте всё сообщение** с кодом и отправьте его сюда.\n"
+                        "**Скопируйте сообщение** с кодом или **перешлите** его сюда.\n"
                         "Бот сам извлечёт код из текста.",
                         buttons=Button.clear()
                     )
                     await event.respond(
-                        "👆 Скопируйте сообщение с кодом целиком:",
+                        "👆 Скопируйте или перешлите сообщение с кодом:",
                         buttons=[
                             [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
                             [Button.inline("❌ Отмена", b"auth_cancel")],
@@ -1038,13 +1038,20 @@ def register_bot_handlers(bot, user_client=None):
 
             # Step 2: Verification code input
             elif state.get('step') == 'code':
-                # Try to extract code from message (handles forwarded messages)
+                # Try to extract code from message (handles copied or forwarded messages)
                 import re
-                code_match = re.search(r'\b(\d{5,6})\b', text)
+
+                # Get text from message (works for both regular and forwarded)
+                msg_text = event.message.text or event.message.message or ""
+
+                # Search for 5-6 digit code in the text
+                code_match = re.search(r'\b(\d{5,6})\b', msg_text)
                 if code_match:
                     code = code_match.group(1)
+                    logger.info(f"Extracted auth code from message: {code[:2]}***")
                 else:
-                    code = text.replace(' ', '').replace('-', '')
+                    # Fallback: treat entire input as code
+                    code = msg_text.replace(' ', '').replace('-', '')
 
                 try:
                     await _user_client.sign_in(
