@@ -5,11 +5,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 This is a Telegram auto-responder bot that:
-- Authenticates users via Telegram using Telethon client
+- Authenticates users via Telegram bot interface
 - Automatically responds to incoming private messages based on emoji status
 - Supports custom emoji-based message templates stored in SQLite
 - Notifies when urgency keyword "ASAP" is detected
-- Runs a Quart web server for authentication alongside the Telethon event loop
+- Runs a Quart web server for API endpoints alongside the Telethon event loop
 
 ## Architecture
 
@@ -38,27 +38,27 @@ This is a Telegram auto-responder bot that:
   ./storage/database.db
 
 ┌───────────────────────────────────────┐
-│     WEB INTERFACE (Quart Server)      │
+│     API SERVER (Quart/Hypercorn)      │
 │         Port 5050 (default)           │
-│  - Authentication Flow                │
 │  - Health Check Endpoint              │
+│  - Meeting API                        │
 └───────────────────────────────────────┘
 ```
 
 The application runs up to three async services concurrently via `asyncio.gather()`:
-1. **Hypercorn/Quart web server** (port 5050): Handles Telegram authentication flow via web UI
+1. **Hypercorn/Quart web server** (port 5050): Provides health check and meeting API
 2. **Telethon user client**: Monitors incoming/outgoing messages and sends auto-replies
-3. **Telethon bot client** (optional): Provides inline keyboard interface for control
+3. **Telethon bot client** (required): Provides authentication and control interface
 
 ### Key Components
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `main.py` | ~250 | Entry point, orchestrates all services |
-| `handlers.py` | ~700 | User client event handlers (commands, auto-reply) |
-| `bot_handlers.py` | ~400 | Bot client handlers with inline keyboards |
-| `models.py` | ~99 | SQLite ORM models (Reply, Settings, Schedule) |
-| `templates/` | 4 files | HTML templates for auth flow (phone, code, 2fa, success) |
+| `main.py` | ~300 | Entry point, orchestrates all services |
+| `handlers.py` | ~150 | User client event handlers (commands, auto-reply) |
+| `bot_handlers.py` | ~900 | Bot client handlers with inline keyboards and auth |
+| `routes.py` | ~150 | API routes (health, meeting) |
+| `models.py` | ~500 | SQLite ORM models (Reply, Settings, Schedule) |
 | `./storage/` | - | Persistent data directory (session file, database) |
 
 ### Module Dependencies
@@ -135,15 +135,11 @@ Main Telethon event handlers in `main.py`:
 | `asap_handler` | `.*ASAP.*` | Incoming | Private | Urgent notification (line 342-381) |
 | `new_messages` | All | Incoming | Private | Auto-reply logic (line 384-414) |
 
-## Web Routes
+## API Routes
 
 | Route | Method | Purpose |
 |-------|--------|---------|
 | `/health` | GET | Health check (returns telethon connection/auth status) |
-| `/` | GET/POST | Phone number input for authentication |
-| `/code` | GET/POST | Verification code input |
-| `/resend` | POST | Request code re-delivery |
-| `/2fa` | GET/POST | Two-factor authentication password |
 | `/api/meeting` | POST | Meeting status control (Zoom integration) |
 
 ### Meeting API
@@ -258,15 +254,13 @@ CREATE TABLE settings (
 
 ## Authentication Flow
 
-### Bot-based Authentication (Primary)
-
-When `BOT_TOKEN` is configured, authentication is handled through the Telegram bot:
+Authentication is handled through the Telegram bot interface:
 
 ```
 1. User sends /start to bot → Bot shows auth button (if not authorized)
-2. User clicks "Авторизоваться" → Bot asks for phone number
-3. User sends phone → Telegram sends code → Bot asks for code
-4. User sends code → Success OR 2FA prompt (if 2FA enabled)
+2. User clicks "Авторизоваться" → Bot shows phone request button
+3. User shares phone or types it → Telegram sends code → Bot asks for code
+4. User sends code (with dashes: 1-2-3-4-5-6) → Success OR 2FA prompt
 5. [Optional] User sends 2FA password → Success
 ```
 
@@ -274,16 +268,7 @@ Access control:
 - If `ALLOWED_USERNAME` is set, only that user can authenticate via bot
 - If not set, anyone who can message the bot can authenticate
 
-### Web-based Authentication (Fallback)
-
-```
-1. User visits / → phone.html (if not authorized)
-2. User submits phone → Telegram sends code → /code
-3. User submits code → Success OR /2fa (if 2FA enabled)
-4. [Optional] User submits 2FA password → Success
-```
-
-Session data stored in Quart's encrypted session cookie (phone, phone_code_hash, code_type, code_length).
+Settings menu includes "Выйти из аккаунта" to logout and re-authenticate.
 
 ## Auto-Reply Flow
 
