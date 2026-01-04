@@ -168,6 +168,7 @@ def get_settings_keyboard():
     """Settings keyboard."""
     return [
         [Button.inline("❌ Отключить автоответчик", b"autoreply_off_confirm")],
+        [Button.inline("🚪 Выйти из аккаунта", b"logout_confirm")],
         [Button.inline("« Назад", b"main")],
     ]
 
@@ -858,6 +859,45 @@ def register_bot_handlers(bot, user_client=None):
             "Отправьте `/autoreply-settings` в любом чате для включения.",
             buttons=get_settings_keyboard()
         )
+
+    @bot.on(events.CallbackQuery(data=b"logout_confirm"))
+    async def logout_confirm(event):
+        """Confirm logout."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        await event.edit(
+            "⚠️ **Выйти из аккаунта?**\n\n"
+            "Сессия Telegram-клиента будет завершена.\n"
+            "Для повторного входа потребуется авторизация.",
+            buttons=get_confirm_keyboard("logout")
+        )
+
+    @bot.on(events.CallbackQuery(data=b"confirm_logout"))
+    async def logout(event):
+        """Logout from user client."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        global _owner_id, _owner_username
+
+        try:
+            await _user_client.log_out()
+            _owner_id = None
+            _owner_username = None
+            logger.info("User logged out via bot")
+
+            await event.edit(
+                "🚪 **Вы вышли из аккаунта**\n\n"
+                "Сессия завершена. Для использования бота\n"
+                "необходимо авторизоваться заново.",
+                buttons=get_auth_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Logout failed: {e}")
+            await event.answer(f"❌ Ошибка: {e}", alert=True)
 
     # =========================================================================
     # Text message handlers for setting replies
