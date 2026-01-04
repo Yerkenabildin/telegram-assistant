@@ -729,6 +729,21 @@ def register_bot_handlers(bot, user_client=None):
         if event.message.text and event.message.text.startswith('/'):
             return
 
+        # Check if we have pending emoji (waiting for reply text) - FIRST!
+        if event.sender_id in _pending_reply_setup:
+            emoji_id = _pending_reply_setup.pop(event.sender_id)
+
+            # Save the reply (even if it contains custom emojis)
+            Reply.create(emoji_id, event.message)
+            logger.info(f"Reply set for emoji {emoji_id} via bot")
+
+            await event.respond(
+                f"✅ Автоответ сохранён!\n\n"
+                f"Emoji ID: `{emoji_id}`",
+                buttons=get_main_menu_keyboard()
+            )
+            return
+
         # Check if message contains custom emoji (new reply setup)
         entities = event.message.entities or []
         custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
@@ -745,20 +760,6 @@ def register_bot_handlers(bot, user_client=None):
                 buttons=[[Button.inline("❌ Отмена", b"cancel_reply_setup")]]
             )
             return
-
-        # Check if we have pending emoji (new reply)
-        if event.sender_id in _pending_reply_setup:
-            emoji_id = _pending_reply_setup.pop(event.sender_id)
-
-            # Save the reply
-            Reply.create(emoji_id, event.message)
-            logger.info(f"Reply set for emoji {emoji_id} via bot")
-
-            await event.respond(
-                f"✅ Автоответ сохранён!\n\n"
-                f"Emoji ID: `{emoji_id}`",
-                buttons=get_main_menu_keyboard()
-            )
 
     @bot.on(events.CallbackQuery(data=b"cancel_reply_setup"))
     async def cancel_reply_setup(event):
