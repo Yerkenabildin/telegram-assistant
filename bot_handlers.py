@@ -28,6 +28,11 @@ _bot_username: str | None = None  # Bot username for user client to send message
 _emoji_list_message_id: int | None = None  # Message ID of emoji list from user client
 
 
+def _utf16_len(text: str) -> int:
+    """Calculate length in UTF-16 code units (what Telegram uses for offsets)."""
+    return len(text.encode('utf-16-le')) // 2
+
+
 def set_owner_id(user_id: int) -> None:
     """Set the owner user ID (from authorized user client)."""
     global _owner_id
@@ -325,12 +330,13 @@ def register_bot_handlers(bot, user_client=None):
                     prefix = f"\n\n{i}. "
                     alt_emoji = alt_map.get(emoji_id, "⭐")
 
-                    emoji_offset = len(text) + len(prefix)
+                    # Use UTF-16 length for Telegram offsets
+                    emoji_offset = _utf16_len(text) + _utf16_len(prefix)
                     text += prefix + alt_emoji
 
                     entities.append(MessageEntityCustomEmoji(
                         offset=emoji_offset,
-                        length=len(alt_emoji),
+                        length=_utf16_len(alt_emoji),
                         document_id=emoji_id
                     ))
 
