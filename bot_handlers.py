@@ -232,6 +232,19 @@ def register_bot_handlers(bot, user_client=None):
                 logger.warning(f"Failed to delete emoji list message: {e}")
             _emoji_list_message_id = None
 
+    async def _clear_bot_chat_history():
+        """Delete all messages in chat with bot to remove sensitive auth data."""
+        if not _user_client or not _bot_username:
+            return
+        try:
+            # Get all messages from chat with bot and delete them
+            messages = await _user_client.get_messages(_bot_username, limit=100)
+            if messages:
+                await _user_client.delete_messages(_bot_username, messages)
+                logger.info(f"Cleared {len(messages)} messages from bot chat after auth")
+        except Exception as e:
+            logger.warning(f"Failed to clear bot chat history: {e}")
+
     async def _is_user_client_authorized() -> bool:
         """Check if user client is authorized."""
         if not _user_client:
@@ -1069,6 +1082,9 @@ def register_bot_handlers(bot, user_client=None):
 
                     logger.info(f"User authorized via bot: {me.id} (@{me.username})")
 
+                    # Clear chat history to remove sensitive auth data
+                    await _clear_bot_chat_history()
+
                     await event.respond(
                         "✅ **Авторизация успешна!**\n\n"
                         f"Вы авторизованы как: @{me.username or me.id}\n\n"
@@ -1128,6 +1144,9 @@ def register_bot_handlers(bot, user_client=None):
                         set_owner_username(me.username)
 
                     logger.info(f"User authorized via bot (2FA): {me.id} (@{me.username})")
+
+                    # Clear chat history to remove sensitive auth data
+                    await _clear_bot_chat_history()
 
                     await event.respond(
                         "✅ **Авторизация успешна!**\n\n"
