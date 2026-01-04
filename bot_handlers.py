@@ -6,18 +6,29 @@ Provides inline keyboard interface for managing:
 - Schedule
 - Meetings
 - Settings
+- Authentication (phone, code, 2FA)
 """
 from __future__ import annotations
 
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomEmoji
 from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest
+from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
 from sqlitemodel import SQL
 
 from config import config
 from logging_config import logger
 from models import Reply, Settings, Schedule
+
+
+# =============================================================================
+# Authentication State
+# =============================================================================
+
+# Store authentication state per user: {user_id: {phone, phone_code_hash, step}}
+# step: 'phone', 'code', '2fa'
+_auth_state: dict[int, dict] = {}
 
 
 # Store owner user ID (set when user client is authorized)
@@ -74,9 +85,40 @@ async def _is_owner(event) -> bool:
     return False
 
 
+async def _can_authenticate(event) -> bool:
+    """Check if user is allowed to authenticate via bot.
+
+    If ALLOWED_USERNAME is set, only that user can authenticate.
+    Otherwise, anyone can authenticate.
+    """
+    if not config.allowed_username:
+        return True
+
+    sender = await event.get_sender()
+    if not sender or not getattr(sender, 'username', None):
+        return False
+
+    allowed = config.allowed_username.lower().lstrip('@')
+    return sender.username.lower() == allowed
+
+
 # =============================================================================
 # Keyboard Layouts
 # =============================================================================
+
+def get_auth_keyboard():
+    """Authentication keyboard."""
+    return [
+        [Button.inline("🔑 Авторизоваться", b"auth_start")],
+    ]
+
+
+def get_auth_cancel_keyboard():
+    """Cancel authentication keyboard."""
+    return [
+        [Button.inline("❌ Отмена", b"auth_cancel")],
+    ]
+
 
 def get_main_menu_keyboard():
     """Main menu keyboard."""
@@ -189,9 +231,39 @@ def register_bot_handlers(bot, user_client=None):
                 logger.warning(f"Failed to delete emoji list message: {e}")
             _emoji_list_message_id = None
 
+    async def _is_user_client_authorized() -> bool:
+        """Check if user client is authorized."""
+        if not _user_client:
+            return False
+        try:
+            return await _user_client.is_user_authorized()
+        except Exception:
+            return False
+
     @bot.on(events.NewMessage(pattern=r"^/start"))
     async def start_handler(event):
-        """Handle /start command - show main menu."""
+        """Handle /start command - show main menu or auth flow."""
+        # Check if user client is authorized
+        is_authorized = await _is_user_client_authorized()
+
+        if not is_authorized:
+            # User client not authorized - show auth flow
+            if not await _can_authenticate(event):
+                await event.respond(
+                    "⛔ **Доступ запрещён**\n\n"
+                    "Авторизация разрешена только для определённого пользователя."
+                )
+                return
+
+            await event.respond(
+                "🔐 **Требуется авторизация**\n\n"
+                "Для работы бота необходимо авторизовать Telegram-клиент.\n\n"
+                "Нажмите кнопку ниже, чтобы начать процесс авторизации.",
+                buttons=get_auth_keyboard()
+            )
+            return
+
+        # User client authorized - check if owner
         if not await _is_owner(event):
             await event.respond("⛔ Доступ запрещён. Этот бот только для владельца.")
             return
@@ -217,6 +289,71 @@ def register_bot_handlers(bot, user_client=None):
             "Выберите раздел:",
             buttons=get_main_menu_keyboard()
         )
+
+    # =========================================================================
+    # Authentication Flow
+    # =========================================================================
+
+    @bot.on(events.CallbackQuery(data=b"auth_start"))
+    async def auth_start(event):
+        """Start authentication flow - ask for phone number."""
+        if not await _can_authenticate(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        # Initialize auth state
+        _auth_state[event.sender_id] = {'step': 'phone'}
+
+        await event.edit(
+            "📱 **Авторизация - Шаг 1/3**\n\n"
+            "Введите номер телефона в международном формате:\n"
+            "Например: `+79001234567`",
+            buttons=get_auth_cancel_keyboard()
+        )
+
+    @bot.on(events.CallbackQuery(data=b"auth_cancel"))
+    async def auth_cancel(event):
+        """Cancel authentication flow."""
+        # Clear auth state
+        if event.sender_id in _auth_state:
+            del _auth_state[event.sender_id]
+
+        await event.edit(
+            "❌ **Авторизация отменена**\n\n"
+            "Нажмите /start чтобы начать заново.",
+            buttons=get_auth_keyboard()
+        )
+
+    @bot.on(events.CallbackQuery(data=b"auth_resend"))
+    async def auth_resend(event):
+        """Resend verification code."""
+        if not await _can_authenticate(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        state = _auth_state.get(event.sender_id)
+        if not state or 'phone' not in state:
+            await event.answer("❌ Сначала введите номер телефона", alert=True)
+            return
+
+        try:
+            result = await _user_client.send_code_request(state['phone'])
+            state['phone_code_hash'] = result.phone_code_hash
+            state['step'] = 'code'
+
+            await event.answer("✅ Код отправлен повторно")
+            await event.edit(
+                "🔢 **Авторизация - Шаг 2/3**\n\n"
+                f"Код отправлен на номер `{state['phone']}`\n\n"
+                "Введите код подтверждения:",
+                buttons=[
+                    [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
+                    [Button.inline("❌ Отмена", b"auth_cancel")],
+                ]
+            )
+        except Exception as e:
+            logger.error(f"Failed to resend code: {e}")
+            await event.answer(f"❌ Ошибка: {e}", alert=True)
 
     # =========================================================================
     # Status
@@ -750,12 +887,159 @@ def register_bot_handlers(bot, user_client=None):
 
     @bot.on(events.NewMessage(func=lambda e: e.is_private))
     async def handle_private_message(event):
-        """Handle private messages for reply setup."""
-        if not await _is_owner(event):
-            return
-
+        """Handle private messages for reply setup and authentication."""
         # Skip commands
         if event.message.text and event.message.text.startswith('/'):
+            return
+
+        # =====================================================================
+        # Authentication Flow - handle phone, code, 2fa input
+        # =====================================================================
+        if event.sender_id in _auth_state:
+            if not await _can_authenticate(event):
+                return
+
+            state = _auth_state[event.sender_id]
+            text = event.message.text.strip() if event.message.text else ""
+
+            # Step 1: Phone number input
+            if state.get('step') == 'phone':
+                phone = text
+                if not phone.startswith('+'):
+                    phone = '+' + phone
+
+                try:
+                    result = await _user_client.send_code_request(phone)
+                    state['phone'] = phone
+                    state['phone_code_hash'] = result.phone_code_hash
+                    state['step'] = 'code'
+
+                    await event.respond(
+                        "🔢 **Авторизация - Шаг 2/3**\n\n"
+                        f"Код отправлен на номер `{phone}`\n\n"
+                        "Введите код подтверждения:",
+                        buttons=[
+                            [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
+                            [Button.inline("❌ Отмена", b"auth_cancel")],
+                        ]
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to send code: {e}")
+                    await event.respond(
+                        f"❌ **Ошибка**\n\n{e}\n\n"
+                        "Попробуйте ещё раз:",
+                        buttons=get_auth_cancel_keyboard()
+                    )
+                return
+
+            # Step 2: Verification code input
+            elif state.get('step') == 'code':
+                code = text.replace(' ', '').replace('-', '')
+
+                try:
+                    await _user_client.sign_in(
+                        phone=state['phone'],
+                        code=code,
+                        phone_code_hash=state['phone_code_hash']
+                    )
+
+                    # Success! Clear auth state
+                    del _auth_state[event.sender_id]
+
+                    # Get user info and set as owner
+                    me = await _user_client.get_me()
+                    set_owner_id(me.id)
+                    if me.username:
+                        set_owner_username(me.username)
+
+                    logger.info(f"User authorized via bot: {me.id} (@{me.username})")
+
+                    await event.respond(
+                        "✅ **Авторизация успешна!**\n\n"
+                        f"Вы авторизованы как: @{me.username or me.id}\n\n"
+                        "Теперь вы можете использовать бота.",
+                        buttons=get_main_menu_keyboard()
+                    )
+
+                except SessionPasswordNeededError:
+                    # 2FA required
+                    state['step'] = '2fa'
+                    await event.respond(
+                        "🔒 **Авторизация - Шаг 3/3**\n\n"
+                        "Ваш аккаунт защищён двухфакторной аутентификацией.\n\n"
+                        "Введите пароль 2FA:",
+                        buttons=get_auth_cancel_keyboard()
+                    )
+
+                except PhoneCodeInvalidError:
+                    await event.respond(
+                        "❌ **Неверный код**\n\n"
+                        "Попробуйте ещё раз или запросите новый код:",
+                        buttons=[
+                            [Button.inline("🔄 Отправить ещё раз", b"auth_resend")],
+                            [Button.inline("❌ Отмена", b"auth_cancel")],
+                        ]
+                    )
+
+                except Exception as e:
+                    logger.error(f"Sign in failed: {e}")
+                    await event.respond(
+                        f"❌ **Ошибка авторизации**\n\n{e}",
+                        buttons=[
+                            [Button.inline("🔄 Попробовать снова", b"auth_resend")],
+                            [Button.inline("❌ Отмена", b"auth_cancel")],
+                        ]
+                    )
+                return
+
+            # Step 3: 2FA password input
+            elif state.get('step') == '2fa':
+                password = text
+
+                try:
+                    await _user_client.sign_in(
+                        phone=state['phone'],
+                        password=password,
+                        phone_code_hash=state['phone_code_hash']
+                    )
+
+                    # Success! Clear auth state
+                    del _auth_state[event.sender_id]
+
+                    # Get user info and set as owner
+                    me = await _user_client.get_me()
+                    set_owner_id(me.id)
+                    if me.username:
+                        set_owner_username(me.username)
+
+                    logger.info(f"User authorized via bot (2FA): {me.id} (@{me.username})")
+
+                    await event.respond(
+                        "✅ **Авторизация успешна!**\n\n"
+                        f"Вы авторизованы как: @{me.username or me.id}\n\n"
+                        "Теперь вы можете использовать бота.",
+                        buttons=get_main_menu_keyboard()
+                    )
+
+                except PasswordHashInvalidError:
+                    await event.respond(
+                        "❌ **Неверный пароль**\n\n"
+                        "Попробуйте ещё раз:",
+                        buttons=get_auth_cancel_keyboard()
+                    )
+
+                except Exception as e:
+                    logger.error(f"2FA sign in failed: {e}")
+                    await event.respond(
+                        f"❌ **Ошибка авторизации**\n\n{e}",
+                        buttons=get_auth_cancel_keyboard()
+                    )
+                return
+
+        # =====================================================================
+        # Reply setup flow (only for authorized owner)
+        # =====================================================================
+        if not await _is_owner(event):
             return
 
         # Check if we have pending emoji (waiting for reply text) - FIRST!

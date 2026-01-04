@@ -119,6 +119,7 @@ docker logs -f telegram-assistant
 | `TIMEZONE` | NO | `Europe/Moscow` | Timezone for schedule (e.g., `Europe/Moscow`, `UTC`) |
 | `MEETING_API_TOKEN` | NO | - | API token for `/api/meeting` endpoint (if not set, no auth required) |
 | `BOT_TOKEN` | NO | - | Telegram bot token from @BotFather for control interface |
+| `ALLOWED_USERNAME` | NO | - | Restrict bot authentication to this username only |
 
 ## Event Handlers
 
@@ -182,9 +183,14 @@ Optional Telegram bot with inline keyboard interface. Requires `BOT_TOKEN` envir
 4. Start the application - bot will run alongside the user client
 
 ### Features
-The bot responds only to the authorized user (owner of the user client session).
 
-**Main Menu** (`/start`):
+**Authentication** (`/start` when not authorized):
+- Shows authentication flow if user client is not authorized
+- If `ALLOWED_USERNAME` is set, only that user can authenticate
+- Guides through phone → code → 2FA (if needed) → success
+
+**Main Menu** (`/start` when authorized):
+The bot responds only to the authorized user (owner of the user client session).
 - 📊 **Статус** - View current status (schedule, replies count, meeting)
 - 📝 **Автоответы** - Manage auto-replies (list, add via emoji + text)
 - 📅 **Расписание** - Schedule management (list, enable/disable, clear)
@@ -251,6 +257,24 @@ CREATE TABLE settings (
 - Schedule table schema: `emoji_id` (TEXT), `days` (TEXT), `time_start` (TEXT), `time_end` (TEXT), `priority` (INT), `name` (TEXT), `date_start` (TEXT), `date_end` (TEXT)
 
 ## Authentication Flow
+
+### Bot-based Authentication (Primary)
+
+When `BOT_TOKEN` is configured, authentication is handled through the Telegram bot:
+
+```
+1. User sends /start to bot → Bot shows auth button (if not authorized)
+2. User clicks "Авторизоваться" → Bot asks for phone number
+3. User sends phone → Telegram sends code → Bot asks for code
+4. User sends code → Success OR 2FA prompt (if 2FA enabled)
+5. [Optional] User sends 2FA password → Success
+```
+
+Access control:
+- If `ALLOWED_USERNAME` is set, only that user can authenticate via bot
+- If not set, anyone who can message the bot can authenticate
+
+### Web-based Authentication (Fallback)
 
 ```
 1. User visits / → phone.html (if not authorized)
