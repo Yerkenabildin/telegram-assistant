@@ -129,8 +129,8 @@ async def schedule_checker():
             if not Schedule.is_scheduling_enabled():
                 continue
 
-            # Clean up expired overrides every hour
-            if check_count % 60 == 0:
+            # Clean up expired overrides once a day
+            if check_count % 1440 == 0:
                 deleted = Schedule.delete_expired()
                 if deleted > 0:
                     logger.info(f"Deleted {deleted} expired override(s)")

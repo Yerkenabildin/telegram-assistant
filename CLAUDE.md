@@ -221,7 +221,7 @@ The bot responds only to the authorized user (owner of the user client session).
    - Checks if scheduling is enabled
    - Gets the emoji that should be active based on current time and date
    - Updates Telegram emoji status if it differs from scheduled
-   - Automatically deletes expired override rules (every hour)
+   - Automatically deletes expired override rules (once a day)
 
 ## Data Persistence
 
