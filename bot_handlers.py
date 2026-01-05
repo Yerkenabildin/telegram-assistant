@@ -19,6 +19,8 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, P
 
 # Regex pattern for parsing time format like "09:00-18:00"
 TIME_RANGE_PATTERN = re.compile(r'^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$')
+# Regex pattern for parsing date range like "25.12-05.01" or "25.12.2024-05.01.2025"
+DATE_RANGE_PATTERN = re.compile(r'^(\d{1,2}\.\d{1,2}(?:\.\d{4})?)\s*[-–—]\s*(\d{1,2}\.\d{1,2}(?:\.\d{4})?)$')
 
 from sqlitemodel import SQL
 
@@ -214,6 +216,9 @@ def get_schedule_keyboard():
         Button.inline(weekend_text, b"schedule_weekend"),
         Button.inline(rest_text, b"schedule_rest"),
     ])
+
+    # Add override button
+    buttons.append([Button.inline("➕ Добавить временное", b"schedule_override_add")])
 
     buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
@@ -1119,6 +1124,36 @@ def register_bot_handlers(bot, user_client=None):
         await event.answer("❌ Отменено")
         await schedule_menu(event)
 
+    @bot.on(events.CallbackQuery(data=b"schedule_override_add"))
+    async def schedule_override_add_start(event):
+        """Start adding an override schedule."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_override_dates.add(event.sender_id)
+
+        await event.edit(
+            "➕ **Добавить временное правило**\n\n"
+            "Используется для отпуска, больничного и т.д.\n\n"
+            "Отправьте даты в формате:\n"
+            "`25.12-05.01` или `25.12.2024-05.01.2025`",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_override_cancel"))
+    async def schedule_override_cancel(event):
+        """Cancel override creation."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_override_dates.discard(event.sender_id)
+        if event.sender_id in _pending_override_emoji:
+            del _pending_override_emoji[event.sender_id]
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
     # =========================================================================
     # Meeting
     # =========================================================================
@@ -1312,6 +1347,9 @@ def register_bot_handlers(bot, user_client=None):
     # Store users waiting to input weekend/rest emoji
     _pending_weekend_emoji: set[int] = set()
     _pending_rest_emoji: set[int] = set()
+    # Store override creation state: {user_id: {"dates": (start, end)}} or {user_id: "dates"} for waiting dates
+    _pending_override_dates: set[int] = set()
+    _pending_override_emoji: dict[int, tuple[str, str]] = {}  # user_id -> (date_start, date_end)
 
     @bot.on(events.CallbackQuery(data=b"reply_add"))
     async def reply_add_start(event):
@@ -1718,6 +1756,58 @@ def register_bot_handlers(bot, user_client=None):
 
             await event.respond(
                 f"✅ Эмодзи по умолчанию установлен!",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is entering override dates
+        if event.sender_id in _pending_override_dates:
+            text = event.message.text.strip() if event.message.text else ""
+            match = DATE_RANGE_PATTERN.match(text)
+
+            if not match:
+                await event.respond(
+                    "❌ Неверный формат дат.\n\n"
+                    "Используйте: `25.12-05.01` или `25.12.2024-05.01.2025`",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+                )
+                return
+
+            date_start = match.group(1)
+            date_end = match.group(2)
+
+            # Move to emoji input stage
+            _pending_override_dates.discard(event.sender_id)
+            _pending_override_emoji[event.sender_id] = (date_start, date_end)
+
+            await event.respond(
+                f"📅 Даты: **{date_start}** — **{date_end}**\n\n"
+                f"Теперь отправьте эмодзи для этого периода:",
+                buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+            )
+            return
+
+        # Check if user is entering override emoji
+        if event.sender_id in _pending_override_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            date_start, date_end = _pending_override_emoji.pop(event.sender_id)
+
+            Schedule.create_override(emoji_id, date_start, date_end)
+            logger.info(f"Override created: {date_start}-{date_end} with emoji {emoji_id}")
+
+            await event.respond(
+                f"✅ Временное правило создано!\n\n"
+                f"📅 **{date_start}** — **{date_end}**",
                 buttons=get_schedule_keyboard()
             )
             return
