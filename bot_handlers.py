@@ -19,8 +19,52 @@ from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, P
 
 # Regex pattern for parsing time format like "09:00-18:00"
 TIME_RANGE_PATTERN = re.compile(r'^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$')
-# Regex pattern for parsing date range like "25.12-05.01" or "25.12.2024-05.01.2025"
-DATE_RANGE_PATTERN = re.compile(r'^(\d{1,2}\.\d{1,2}(?:\.\d{4})?)\s*[-–—]\s*(\d{1,2}\.\d{1,2}(?:\.\d{4})?)$')
+
+# Date component pattern
+_DATE_PART = r'(\d{1,2}\.\d{1,2}(?:\.\d{4})?)'
+_TIME_PART = r'(\d{1,2}:\d{2})'
+_SEP = r'\s*[-–—]\s*'
+
+
+def parse_datetime_range(text: str) -> tuple[str, str, str, str] | None:
+    """Parse flexible datetime range formats.
+
+    Supported formats:
+    - "06.01-07.01" → (06.01, 00:00, 07.01, 23:59)
+    - "06.01 9:30-11:30" → (06.01, 09:30, 06.01, 11:30)
+    - "06.01 12:00 - 07.01 15:00" → (06.01, 12:00, 07.01, 15:00)
+
+    Returns:
+        Tuple of (date_start, time_start, date_end, time_end) or None if no match
+    """
+    text = text.strip()
+
+    # Pattern 1: "06.01 12:00 - 07.01 15:00" (full datetime range)
+    match = re.match(
+        rf'^{_DATE_PART}\s+{_TIME_PART}{_SEP}{_DATE_PART}\s+{_TIME_PART}$',
+        text
+    )
+    if match:
+        return (match.group(1), match.group(2), match.group(3), match.group(4))
+
+    # Pattern 2: "06.01 9:30-11:30" (single day with time range)
+    match = re.match(
+        rf'^{_DATE_PART}\s+{_TIME_PART}{_SEP}{_TIME_PART}$',
+        text
+    )
+    if match:
+        date = match.group(1)
+        return (date, match.group(2), date, match.group(3))
+
+    # Pattern 3: "06.01-07.01" (date range, full days)
+    match = re.match(
+        rf'^{_DATE_PART}{_SEP}{_DATE_PART}$',
+        text
+    )
+    if match:
+        return (match.group(1), "00:00", match.group(2), "23:59")
+
+    return None
 
 from sqlitemodel import SQL
 
@@ -1136,8 +1180,10 @@ def register_bot_handlers(bot, user_client=None):
         await event.edit(
             "➕ **Добавить временное правило**\n\n"
             "Используется для отпуска, больничного и т.д.\n\n"
-            "Отправьте даты в формате:\n"
-            "`25.12-05.01` или `25.12.2024-05.01.2025`",
+            "Форматы:\n"
+            "• `06.01-07.01` — весь день\n"
+            "• `06.01 9:30-11:30` — время в один день\n"
+            "• `06.01 12:00 - 07.01 15:00` — диапазон",
             buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
         )
 
@@ -1763,26 +1809,40 @@ def register_bot_handlers(bot, user_client=None):
         # Check if user is entering override dates
         if event.sender_id in _pending_override_dates:
             text = event.message.text.strip() if event.message.text else ""
-            match = DATE_RANGE_PATTERN.match(text)
+            parsed = parse_datetime_range(text)
 
-            if not match:
+            if not parsed:
                 await event.respond(
-                    "❌ Неверный формат дат.\n\n"
-                    "Используйте: `25.12-05.01` или `25.12.2024-05.01.2025`",
+                    "❌ Неверный формат.\n\n"
+                    "Примеры:\n"
+                    "• `06.01-07.01` — весь день\n"
+                    "• `06.01 9:30-11:30` — время в один день\n"
+                    "• `06.01 12:00 - 07.01 15:00` — диапазон",
                     buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
                 )
                 return
 
-            date_start = match.group(1)
-            date_end = match.group(2)
+            date_start, time_start, date_end, time_end = parsed
+
+            # Normalize time format
+            time_start = ':'.join(p.zfill(2) for p in time_start.split(':'))
+            time_end = ':'.join(p.zfill(2) for p in time_end.split(':'))
 
             # Move to emoji input stage
             _pending_override_dates.discard(event.sender_id)
-            _pending_override_emoji[event.sender_id] = (date_start, date_end)
+            _pending_override_emoji[event.sender_id] = (date_start, time_start, date_end, time_end)
+
+            # Format display
+            if time_start == "00:00" and time_end == "23:59":
+                period_display = f"**{date_start}** — **{date_end}**"
+            elif date_start == date_end:
+                period_display = f"**{date_start}** с **{time_start}** до **{time_end}**"
+            else:
+                period_display = f"**{date_start} {time_start}** — **{date_end} {time_end}**"
 
             await event.respond(
-                f"📅 Даты: **{date_start}** — **{date_end}**\n\n"
-                f"Теперь отправьте эмодзи для этого периода:",
+                f"📅 Период: {period_display}\n\n"
+                f"Теперь отправьте эмодзи:",
                 buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
             )
             return
@@ -1800,14 +1860,22 @@ def register_bot_handlers(bot, user_client=None):
                 return
 
             emoji_id = custom_emojis[0].document_id
-            date_start, date_end = _pending_override_emoji.pop(event.sender_id)
+            date_start, time_start, date_end, time_end = _pending_override_emoji.pop(event.sender_id)
 
-            Schedule.create_override(emoji_id, date_start, date_end)
-            logger.info(f"Override created: {date_start}-{date_end} with emoji {emoji_id}")
+            Schedule.create_override(emoji_id, date_start, date_end, time_start, time_end)
+            logger.info(f"Override created: {date_start} {time_start} - {date_end} {time_end} with emoji {emoji_id}")
+
+            # Format display
+            if time_start == "00:00" and time_end == "23:59":
+                period_display = f"**{date_start}** — **{date_end}**"
+            elif date_start == date_end:
+                period_display = f"**{date_start}** с **{time_start}** до **{time_end}**"
+            else:
+                period_display = f"**{date_start} {time_start}** — **{date_end} {time_end}**"
 
             await event.respond(
                 f"✅ Временное правило создано!\n\n"
-                f"📅 **{date_start}** — **{date_end}**",
+                f"📅 {period_display}",
                 buttons=get_schedule_keyboard()
             )
             return

@@ -258,13 +258,22 @@ class Schedule(Model):
         return schedule
 
     @staticmethod
-    def create_override(emoji_id, date_start, date_end, name="Перекрытие"):
-        """Create an override rule that applies 24/7 within date range"""
+    def create_override(emoji_id, date_start, date_end, time_start="00:00", time_end="23:59", name="Перекрытие"):
+        """Create an override rule within date/time range.
+
+        Args:
+            emoji_id: Emoji document ID
+            date_start: Start date (DD.MM or DD.MM.YYYY)
+            date_end: End date (DD.MM or DD.MM.YYYY)
+            time_start: Start time (HH:MM), default "00:00"
+            time_end: End time (HH:MM), default "23:59"
+            name: Rule name
+        """
         return Schedule.create(
             emoji_id=emoji_id,
             days=[0, 1, 2, 3, 4, 5, 6],  # Every day
-            time_start="00:00",
-            time_end="23:59",
+            time_start=time_start,
+            time_end=time_end,
             priority=PRIORITY_OVERRIDE,
             name=name,
             date_start=date_start,
@@ -332,7 +341,19 @@ class Schedule(Model):
         """Get date range as human-readable string"""
         if not self.is_override():
             return None
+
+        # Check if time is not default (00:00-23:59)
+        has_custom_time = (self.time_start and self.time_start != "00:00") or \
+                          (self.time_end and self.time_end != "23:59")
+
         if self.date_start and self.date_end:
+            if has_custom_time:
+                if self.date_start == self.date_end:
+                    # Same day with time: "06.01 9:30-11:30"
+                    return f"{self.date_start} {self.time_start}-{self.time_end}"
+                else:
+                    # Date range with time: "06.01 12:00 - 07.01 15:00"
+                    return f"{self.date_start} {self.time_start} — {self.date_end} {self.time_end}"
             return f"{self.date_start} — {self.date_end}"
         elif self.date_start:
             return f"с {self.date_start}"
@@ -357,9 +378,31 @@ class Schedule(Model):
         if now is None:
             now = get_now()
 
+        # For override rules with specific times, check full datetime range
+        if self.is_override() and self.date_start and self.date_end:
+            try:
+                start_date = parse_date_str(self.date_start)
+                end_date = parse_date_str(self.date_end)
+
+                # Parse time components
+                start_h, start_m = map(int, self.time_start.split(':'))
+                end_h, end_m = map(int, self.time_end.split(':'))
+
+                start_dt = datetime.combine(start_date, datetime.min.time().replace(hour=start_h, minute=start_m))
+                end_dt = datetime.combine(end_date, datetime.min.time().replace(hour=end_h, minute=end_m))
+
+                # Make timezone-aware if now is timezone-aware
+                if now.tzinfo:
+                    start_dt = start_dt.replace(tzinfo=now.tzinfo)
+                    end_dt = end_dt.replace(tzinfo=now.tzinfo)
+
+                return start_dt <= now <= end_dt
+            except (ValueError, IndexError):
+                pass  # Fall through to regular check
+
         today = now.date()
 
-        # Check date range if specified
+        # Check date range if specified (for non-override or fallback)
         try:
             if self.date_start:
                 start_date = parse_date_str(self.date_start)
