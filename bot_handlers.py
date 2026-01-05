@@ -212,10 +212,9 @@ def _format_schedule_rule_text(s: Schedule) -> str:
             parts.append("(истекло)")
     else:
         parts.append(f"{s.get_days_display()} {s.time_start}—{s.time_end}")
-
-    # Priority/type name
-    type_name = _get_priority_name(s.priority)
-    parts.append(f"• {type_name}")
+        # Priority/type name (only for regular rules, overrides are in separate section)
+        type_name = _get_priority_name(s.priority)
+        parts.append(f"• {type_name}")
 
     return " ".join(parts)
 
@@ -866,7 +865,7 @@ def register_bot_handlers(bot, user_client=None):
                     nonlocal text
                     if not rules:
                         return
-                    text += f"\n{title}\n"
+                    text += f"\n{title}"
                     for s in rules:
                         emoji_id = int(s.emoji_id)
                         alt_emoji = alt_map.get(emoji_id, "⭐")
@@ -885,6 +884,8 @@ def register_bot_handlers(bot, user_client=None):
                         ))
 
                 add_section("📆 Временные:", overrides)
+                if overrides and regular:
+                    text += "\n"  # Spacing between sections
                 add_section("🔄 Постоянные:", regular)
 
                 # Footer
