@@ -22,6 +22,27 @@ def get_now() -> datetime:
     """Get current datetime in the configured timezone."""
     return datetime.now(ZoneInfo(config.timezone))
 
+
+def parse_date_str(date_str: str, reference_year: int = None) -> date:
+    """Parse date string in DD.MM or DD.MM.YYYY format to date object.
+
+    Args:
+        date_str: Date string like "25.12" or "25.12.2024"
+        reference_year: Year to use if not specified in date_str
+
+    Returns:
+        date object
+    """
+    if reference_year is None:
+        reference_year = get_now().year
+
+    parts = date_str.split('.')
+    day = int(parts[0])
+    month = int(parts[1])
+    year = int(parts[2]) if len(parts) > 2 else reference_year
+
+    return date(year, month, day)
+
 # Day name mappings for parsing
 DAY_NAMES = {
     'пн': 0, 'mon': 0, 'пнд': 0,
@@ -325,21 +346,31 @@ class Schedule(Model):
             return False
         if now is None:
             now = get_now()
-        current_date = now.strftime('%Y-%m-%d')
-        return current_date > self.date_end
+        try:
+            end_date = parse_date_str(self.date_end)
+            return now.date() > end_date
+        except (ValueError, IndexError):
+            return False
 
     def matches_now(self, now=None):
         """Check if this schedule rule matches current time"""
         if now is None:
             now = get_now()
 
-        current_date = now.strftime('%Y-%m-%d')
+        today = now.date()
 
         # Check date range if specified
-        if self.date_start and current_date < self.date_start:
-            return False
-        if self.date_end and current_date > self.date_end:
-            return False
+        try:
+            if self.date_start:
+                start_date = parse_date_str(self.date_start)
+                if today < start_date:
+                    return False
+            if self.date_end:
+                end_date = parse_date_str(self.date_end)
+                if today > end_date:
+                    return False
+        except (ValueError, IndexError):
+            pass  # Invalid date format, skip date check
 
         current_day = now.weekday()  # 0=Monday, 6=Sunday
         current_time = now.strftime('%H:%M')
