@@ -310,10 +310,10 @@ class Schedule(Model):
     @staticmethod
     def delete_by_id(schedule_id):
         """Delete a schedule rule by ID"""
-        schedule = Schedule(schedule_id)
-        if schedule.emoji_id:  # exists
-            schedule.delete()
-            return True
+        for schedule in Schedule.get_all():
+            if schedule.id == schedule_id:
+                schedule.delete()
+                return True
         return False
 
     def get_days_list(self):
