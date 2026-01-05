@@ -387,17 +387,27 @@ class Schedule(Model):
         Settings.set('schedule_enabled', 'true' if enabled else 'false')
 
     @staticmethod
+    def get_work_schedule():
+        """Get the work schedule rule (priority=PRIORITY_WORK).
+
+        Returns:
+            Schedule object or None if no work schedule is configured.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_WORK:
+                return rule
+        return None
+
+    @staticmethod
     def get_work_emoji_id() -> Optional[int]:
         """Get emoji_id from work schedule rule (priority=PRIORITY_WORK).
 
         Returns:
             Emoji ID as int, or None if no work schedule is configured.
         """
-        all_rules = Schedule.get_all()
-        for rule in all_rules:
-            if rule.priority == PRIORITY_WORK:
-                return int(rule.emoji_id)
-        return None
+        work = Schedule.get_work_schedule()
+        return int(work.emoji_id) if work else None
 
     # Meeting management methods
     @staticmethod

@@ -10,6 +10,8 @@ Provides inline keyboard interface for managing:
 """
 from __future__ import annotations
 
+import re
+
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomEmoji
 from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest, DeleteHistoryRequest
@@ -179,12 +181,22 @@ def get_schedule_keyboard():
     toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
     toggle_data = b"schedule_off" if is_enabled else b"schedule_on"
 
-    return [
+    buttons = [
         [Button.inline("📋 Список правил", b"schedule_list")],
+    ]
+
+    # Add work time edit button if work schedule exists
+    work = Schedule.get_work_schedule()
+    if work:
+        buttons.append([Button.inline(f"✏️ Рабочее время ({work.time_start}—{work.time_end})", b"schedule_work_edit")])
+
+    buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
         [Button.inline("🗑 Очистить всё", b"schedule_clear_confirm")],
         [Button.inline("« Назад", b"main")],
-    ]
+    ])
+
+    return buttons
 
 
 def get_meeting_keyboard():
@@ -917,6 +929,39 @@ def register_bot_handlers(bot, user_client=None):
             buttons=get_schedule_keyboard()
         )
 
+    @bot.on(events.CallbackQuery(data=b"schedule_work_edit"))
+    async def schedule_work_edit_start(event):
+        """Start editing work schedule time."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        work = Schedule.get_work_schedule()
+        if not work:
+            await event.answer("❌ Рабочее расписание не найдено", alert=True)
+            return
+
+        _pending_work_time_edit.add(event.sender_id)
+
+        await event.edit(
+            f"✏️ **Изменение рабочего времени**\n\n"
+            f"Текущее время: **{work.time_start}—{work.time_end}**\n\n"
+            f"Отправьте новое время в формате:\n"
+            f"`09:00-18:00`",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_work_edit_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_work_edit_cancel"))
+    async def schedule_work_edit_cancel(event):
+        """Cancel work schedule time editing."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_work_time_edit.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
     # =========================================================================
     # Meeting
     # =========================================================================
@@ -1095,13 +1140,15 @@ def register_bot_handlers(bot, user_client=None):
         )
 
     # =========================================================================
-    # Text message handlers for setting replies
+    # Text message handlers for setting replies and schedule
     # =========================================================================
 
     # Store pending reply setup: {user_id: emoji_id}
     _pending_reply_setup: dict[int, int] = {}
     # Store users in "add mode" waiting for emoji
     _pending_reply_add_mode: set[int] = set()
+    # Store users waiting to input work schedule time
+    _pending_work_time_edit: set[int] = set()
 
     @bot.on(events.CallbackQuery(data=b"reply_add"))
     async def reply_add_start(event):
@@ -1313,9 +1360,54 @@ def register_bot_handlers(bot, user_client=None):
                 return
 
         # =====================================================================
-        # Reply setup flow (only for authorized owner)
+        # Reply/Schedule setup flow (only for authorized owner)
         # =====================================================================
         if not await _is_owner(event):
+            return
+
+        # Check if user is editing work schedule time
+        if event.sender_id in _pending_work_time_edit:
+            text = event.message.text.strip() if event.message.text else ""
+
+            # Parse time format: "09:00-18:00" or "09:00 - 18:00"
+            match = re.match(r'^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$', text)
+
+            if not match:
+                await event.respond(
+                    "❌ Неверный формат времени.\n\n"
+                    "Используйте формат: `09:00-18:00`",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_work_edit_cancel")]]
+                )
+                return
+
+            time_start = match.group(1)
+            time_end = match.group(2)
+
+            # Normalize to HH:MM format
+            time_start = ':'.join(p.zfill(2) for p in time_start.split(':'))
+            time_end = ':'.join(p.zfill(2) for p in time_end.split(':'))
+
+            # Update work schedule
+            work = Schedule.get_work_schedule()
+            if work:
+                work.time_start = time_start
+                work.time_end = time_end
+                work.save()
+                logger.info(f"Work schedule time updated to {time_start}-{time_end}")
+
+                _pending_work_time_edit.discard(event.sender_id)
+
+                await event.respond(
+                    f"✅ Рабочее время изменено!\n\n"
+                    f"Новое время: **{time_start}—{time_end}**",
+                    buttons=get_schedule_keyboard()
+                )
+            else:
+                _pending_work_time_edit.discard(event.sender_id)
+                await event.respond(
+                    "❌ Рабочее расписание не найдено.",
+                    buttons=get_schedule_keyboard()
+                )
             return
 
         # Check if we have pending emoji (waiting for reply text) - FIRST!
