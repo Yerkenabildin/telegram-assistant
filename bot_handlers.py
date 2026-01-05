@@ -17,6 +17,9 @@ from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomE
 from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest, DeleteHistoryRequest
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
+# Regex pattern for parsing time format like "09:00-18:00"
+TIME_RANGE_PATTERN = re.compile(r'^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$')
+
 from sqlitemodel import SQL
 
 from config import config
@@ -1370,7 +1373,7 @@ def register_bot_handlers(bot, user_client=None):
             text = event.message.text.strip() if event.message.text else ""
 
             # Parse time format: "09:00-18:00" or "09:00 - 18:00"
-            match = re.match(r'^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$', text)
+            match = TIME_RANGE_PATTERN.match(text)
 
             if not match:
                 await event.respond(
