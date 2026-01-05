@@ -821,8 +821,9 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        # Clean up other section's message
+        # Clean up messages from other sections or list view
         await _delete_emoji_list_message()
+        await _delete_schedule_list_message()
 
         is_enabled = Schedule.is_scheduling_enabled()
         status = "✅ включено" if is_enabled else "❌ выключено"
