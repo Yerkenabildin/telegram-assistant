@@ -119,6 +119,11 @@ async def schedule_checker():
 
     logger.info("Schedule checker active")
 
+    # Clean up expired overrides on startup
+    deleted = Schedule.delete_expired()
+    if deleted > 0:
+        logger.info(f"Deleted {deleted} expired override(s) on startup")
+
     check_count = 0
 
     while True:
