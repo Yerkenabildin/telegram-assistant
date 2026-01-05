@@ -263,20 +263,27 @@ def get_schedule_keyboard():
     # Add override button
     buttons.append([Button.inline("➕ Добавить временное", b"schedule_override_add")])
 
-    # Add delete buttons for overrides (temporary rules)
-    overrides = [s for s in Schedule.get_all() if s.is_override()]
-    if overrides:
-        # Show up to 4 delete buttons per row
-        del_buttons = [Button.inline(f"🗑 #{s.id}", f"schedule_del_{s.id}".encode()) for s in overrides[:8]]
-        for i in range(0, len(del_buttons), 4):
-            buttons.append(del_buttons[i:i+4])
-
     buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
         [Button.inline("🗑 Очистить всё", b"schedule_clear_confirm")],
         [Button.inline("« Назад", b"main")],
     ])
 
+    return buttons
+
+
+def get_schedule_list_keyboard():
+    """Keyboard for schedule list view with delete buttons."""
+    buttons = []
+
+    # Delete buttons for overrides only
+    overrides = [s for s in Schedule.get_all() if s.is_override()]
+    if overrides:
+        del_buttons = [Button.inline(f"🗑 #{s.id}", f"schedule_del_{s.id}".encode()) for s in overrides[:8]]
+        for i in range(0, len(del_buttons), 4):
+            buttons.append(del_buttons[i:i+4])
+
+    buttons.append([Button.inline("« Назад", b"schedule")])
     return buttons
 
 
@@ -927,8 +934,8 @@ def register_bot_handlers(bot, user_client=None):
                     )
                     _schedule_list_message_id = msg.id
 
-                # Bot shows only keyboard
-                await event.edit("⬆️ Список правил выше", buttons=get_schedule_keyboard())
+                # Bot shows only keyboard with delete buttons
+                await event.edit("⬆️ Список правил выше", buttons=get_schedule_list_keyboard())
                 return
             except Exception as e:
                 logger.warning(f"Failed to send schedule via user client: {e}")
@@ -951,7 +958,7 @@ def register_bot_handlers(bot, user_client=None):
         lines.append("─" * 20)
         lines.append("💡 Удаление через кнопки 🗑")
 
-        await event.edit('\n'.join(lines), buttons=get_schedule_keyboard())
+        await event.edit('\n'.join(lines), buttons=get_schedule_list_keyboard())
 
     @bot.on(events.CallbackQuery(data=b"schedule_on"))
     async def schedule_enable(event):
