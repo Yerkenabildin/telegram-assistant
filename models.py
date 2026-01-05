@@ -22,6 +22,27 @@ def get_now() -> datetime:
     """Get current datetime in the configured timezone."""
     return datetime.now(ZoneInfo(config.timezone))
 
+
+def parse_date_str(date_str: str, reference_year: int = None) -> date:
+    """Parse date string in DD.MM or DD.MM.YYYY format to date object.
+
+    Args:
+        date_str: Date string like "25.12" or "25.12.2024"
+        reference_year: Year to use if not specified in date_str
+
+    Returns:
+        date object
+    """
+    if reference_year is None:
+        reference_year = get_now().year
+
+    parts = date_str.split('.')
+    day = int(parts[0])
+    month = int(parts[1])
+    year = int(parts[2]) if len(parts) > 2 else reference_year
+
+    return date(year, month, day)
+
 # Day name mappings for parsing
 DAY_NAMES = {
     'пн': 0, 'mon': 0, 'пнд': 0,
@@ -37,6 +58,8 @@ DAY_DISPLAY = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
 
 # Priority levels
 PRIORITY_REST = 1        # Fallback/rest rules
+PRIORITY_MORNING = 2     # Morning (before work) on weekdays
+PRIORITY_EVENING = 3     # Evening (after work) on weekdays
 PRIORITY_WEEKENDS = 8    # Weekends schedule
 PRIORITY_WORK = 10       # Work schedule
 PRIORITY_MEETING = 50    # Active meeting/call (via API)
@@ -235,13 +258,22 @@ class Schedule(Model):
         return schedule
 
     @staticmethod
-    def create_override(emoji_id, date_start, date_end, name="Перекрытие"):
-        """Create an override rule that applies 24/7 within date range"""
+    def create_override(emoji_id, date_start, date_end, time_start="00:00", time_end="23:59", name="Перекрытие"):
+        """Create an override rule within date/time range.
+
+        Args:
+            emoji_id: Emoji document ID
+            date_start: Start date (DD.MM or DD.MM.YYYY)
+            date_end: End date (DD.MM or DD.MM.YYYY)
+            time_start: Start time (HH:MM), default "00:00"
+            time_end: End time (HH:MM), default "23:59"
+            name: Rule name
+        """
         return Schedule.create(
             emoji_id=emoji_id,
             days=[0, 1, 2, 3, 4, 5, 6],  # Every day
-            time_start="00:00",
-            time_end="23:59",
+            time_start=time_start,
+            time_end=time_end,
             priority=PRIORITY_OVERRIDE,
             name=name,
             date_start=date_start,
@@ -278,10 +310,10 @@ class Schedule(Model):
     @staticmethod
     def delete_by_id(schedule_id):
         """Delete a schedule rule by ID"""
-        schedule = Schedule(schedule_id)
-        if schedule.emoji_id:  # exists
-            schedule.delete()
-            return True
+        for schedule in Schedule.get_all():
+            if schedule.id == schedule_id:
+                schedule.delete()
+                return True
         return False
 
     def get_days_list(self):
@@ -309,7 +341,19 @@ class Schedule(Model):
         """Get date range as human-readable string"""
         if not self.is_override():
             return None
+
+        # Check if time is not default (00:00-23:59)
+        has_custom_time = (self.time_start and self.time_start != "00:00") or \
+                          (self.time_end and self.time_end != "23:59")
+
         if self.date_start and self.date_end:
+            if has_custom_time:
+                if self.date_start == self.date_end:
+                    # Same day with time: "06.01 9:30-11:30"
+                    return f"{self.date_start} {self.time_start}-{self.time_end}"
+                else:
+                    # Date range with time: "06.01 12:00 - 07.01 15:00"
+                    return f"{self.date_start} {self.time_start} — {self.date_end} {self.time_end}"
             return f"{self.date_start} — {self.date_end}"
         elif self.date_start:
             return f"с {self.date_start}"
@@ -323,21 +367,53 @@ class Schedule(Model):
             return False
         if now is None:
             now = get_now()
-        current_date = now.strftime('%Y-%m-%d')
-        return current_date > self.date_end
+        try:
+            end_date = parse_date_str(self.date_end)
+            return now.date() > end_date
+        except (ValueError, IndexError):
+            return False
 
     def matches_now(self, now=None):
         """Check if this schedule rule matches current time"""
         if now is None:
             now = get_now()
 
-        current_date = now.strftime('%Y-%m-%d')
+        # For override rules with specific times, check full datetime range
+        if self.is_override() and self.date_start and self.date_end:
+            try:
+                start_date = parse_date_str(self.date_start)
+                end_date = parse_date_str(self.date_end)
 
-        # Check date range if specified
-        if self.date_start and current_date < self.date_start:
-            return False
-        if self.date_end and current_date > self.date_end:
-            return False
+                # Parse time components
+                start_h, start_m = map(int, self.time_start.split(':'))
+                end_h, end_m = map(int, self.time_end.split(':'))
+
+                start_dt = datetime.combine(start_date, datetime.min.time().replace(hour=start_h, minute=start_m))
+                end_dt = datetime.combine(end_date, datetime.min.time().replace(hour=end_h, minute=end_m))
+
+                # Make timezone-aware if now is timezone-aware
+                if now.tzinfo:
+                    start_dt = start_dt.replace(tzinfo=now.tzinfo)
+                    end_dt = end_dt.replace(tzinfo=now.tzinfo)
+
+                return start_dt <= now <= end_dt
+            except (ValueError, IndexError):
+                pass  # Fall through to regular check
+
+        today = now.date()
+
+        # Check date range if specified (for non-override or fallback)
+        try:
+            if self.date_start:
+                start_date = parse_date_str(self.date_start)
+                if today < start_date:
+                    return False
+            if self.date_end:
+                end_date = parse_date_str(self.date_end)
+                if today > end_date:
+                    return False
+        except (ValueError, IndexError):
+            pass  # Invalid date format, skip date check
 
         current_day = now.weekday()  # 0=Monday, 6=Sunday
         current_time = now.strftime('%H:%M')
@@ -387,17 +463,203 @@ class Schedule(Model):
         Settings.set('schedule_enabled', 'true' if enabled else 'false')
 
     @staticmethod
+    def get_work_schedule():
+        """Get the work schedule rule (priority=PRIORITY_WORK).
+
+        Returns:
+            Schedule object or None if no work schedule is configured.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_WORK:
+                return rule
+        return None
+
+    @staticmethod
     def get_work_emoji_id() -> Optional[int]:
         """Get emoji_id from work schedule rule (priority=PRIORITY_WORK).
 
         Returns:
             Emoji ID as int, or None if no work schedule is configured.
         """
+        work = Schedule.get_work_schedule()
+        return int(work.emoji_id) if work else None
+
+    @staticmethod
+    def get_friday_weekend_schedule():
+        """Get the weekend schedule rule that includes Friday (day 4).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
         all_rules = Schedule.get_all()
         for rule in all_rules:
-            if rule.priority == PRIORITY_WORK:
-                return int(rule.emoji_id)
+            if rule.priority == PRIORITY_WEEKENDS and 4 in rule.get_days_list():
+                return rule
         return None
+
+    @staticmethod
+    def get_morning_schedule():
+        """Get the morning schedule rule (before work on weekdays).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_MORNING:
+                return rule
+        return None
+
+    @staticmethod
+    def get_evening_schedule():
+        """Get the evening schedule rule (after work on weekdays).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_EVENING:
+                return rule
+        return None
+
+    @staticmethod
+    def set_morning_emoji(emoji_id, work_start: str = "09:00"):
+        """Set or update morning schedule emoji.
+
+        Args:
+            emoji_id: Emoji document ID
+            work_start: Work start time (morning ends at this time)
+        """
+        morning = Schedule.get_morning_schedule()
+        if morning:
+            morning.emoji_id = str(emoji_id)
+            morning.time_end = work_start
+            morning.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[0, 1, 2, 3, 4],  # Mon-Fri
+                time_start="00:00",
+                time_end=work_start,
+                priority=PRIORITY_MORNING,
+                name="morning"
+            )
+
+    @staticmethod
+    def set_evening_emoji(emoji_id, work_end: str = "18:00"):
+        """Set or update evening schedule emoji.
+
+        Args:
+            emoji_id: Emoji document ID
+            work_end: Work end time (evening starts at this time)
+        """
+        evening = Schedule.get_evening_schedule()
+        if evening:
+            evening.emoji_id = str(emoji_id)
+            evening.time_start = work_end
+            evening.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[0, 1, 2, 3, 4],  # Mon-Fri
+                time_start=work_end,
+                time_end="23:59",
+                priority=PRIORITY_EVENING,
+                name="evening"
+            )
+
+    @staticmethod
+    def get_weekend_schedule():
+        """Get the weekend schedule rule for Sat-Sun (full day).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            # Weekend rule: priority WEEKENDS, covers Sat-Sun (days 5,6)
+            if rule.priority == PRIORITY_WEEKENDS and 5 in rule.get_days_list() and 6 in rule.get_days_list():
+                return rule
+        return None
+
+    @staticmethod
+    def get_rest_schedule():
+        """Get the rest/fallback schedule rule.
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_REST:
+                return rule
+        return None
+
+    @staticmethod
+    def set_weekend_emoji(emoji_id, work_end: str = "18:00"):
+        """Set or update weekend schedule emoji.
+
+        Creates two rules:
+        - Friday evening (work_end - 23:59)
+        - Sat-Sun all day
+
+        Args:
+            emoji_id: Emoji document ID
+            work_end: Work end time (Friday weekend starts at this time)
+        """
+        # Update or create Friday weekend rule
+        friday = Schedule.get_friday_weekend_schedule()
+        if friday:
+            friday.emoji_id = str(emoji_id)
+            friday.time_start = work_end
+            friday.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[4],  # Friday only
+                time_start=work_end,
+                time_end="23:59",
+                priority=PRIORITY_WEEKENDS,
+                name="weekends"
+            )
+
+        # Update or create Sat-Sun rule
+        weekend = Schedule.get_weekend_schedule()
+        if weekend:
+            weekend.emoji_id = str(emoji_id)
+            weekend.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[5, 6],  # Sat-Sun
+                time_start="00:00",
+                time_end="23:59",
+                priority=PRIORITY_WEEKENDS,
+                name="weekends"
+            )
+
+    @staticmethod
+    def set_rest_emoji(emoji_id):
+        """Set or update rest/fallback schedule emoji.
+
+        Args:
+            emoji_id: Emoji document ID
+        """
+        rest = Schedule.get_rest_schedule()
+        if rest:
+            rest.emoji_id = str(emoji_id)
+            rest.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[0, 1, 2, 3, 4, 5, 6],  # Every day
+                time_start="00:00",
+                time_end="23:59",
+                priority=PRIORITY_REST,
+                name="rest"
+            )
 
     # Meeting management methods
     @staticmethod

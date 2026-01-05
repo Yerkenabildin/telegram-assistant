@@ -10,16 +10,67 @@ Provides inline keyboard interface for managing:
 """
 from __future__ import annotations
 
+import re
+
 from telethon import events, Button
 from telethon.tl.types import MessageEntityCustomEmoji, DocumentAttributeCustomEmoji
 from telethon.tl.functions.messages import GetCustomEmojiDocumentsRequest, DeleteHistoryRequest
 from telethon.errors import SessionPasswordNeededError, PhoneCodeInvalidError, PasswordHashInvalidError
 
+# Regex pattern for parsing time format like "09:00-18:00"
+TIME_RANGE_PATTERN = re.compile(r'^(\d{1,2}:\d{2})\s*[-–—]\s*(\d{1,2}:\d{2})$')
+
+# Date component pattern
+_DATE_PART = r'(\d{1,2}\.\d{1,2}(?:\.\d{4})?)'
+_TIME_PART = r'(\d{1,2}:\d{2})'
+_SEP = r'\s*[-–—]\s*'
+
+
+def parse_datetime_range(text: str) -> tuple[str, str, str, str] | None:
+    """Parse flexible datetime range formats.
+
+    Supported formats:
+    - "06.01-07.01" → (06.01, 00:00, 07.01, 23:59)
+    - "06.01 9:30-11:30" → (06.01, 09:30, 06.01, 11:30)
+    - "06.01 12:00 - 07.01 15:00" → (06.01, 12:00, 07.01, 15:00)
+
+    Returns:
+        Tuple of (date_start, time_start, date_end, time_end) or None if no match
+    """
+    text = text.strip()
+
+    # Pattern 1: "06.01 12:00 - 07.01 15:00" (full datetime range)
+    match = re.match(
+        rf'^{_DATE_PART}\s+{_TIME_PART}{_SEP}{_DATE_PART}\s+{_TIME_PART}$',
+        text
+    )
+    if match:
+        return (match.group(1), match.group(2), match.group(3), match.group(4))
+
+    # Pattern 2: "06.01 9:30-11:30" (single day with time range)
+    match = re.match(
+        rf'^{_DATE_PART}\s+{_TIME_PART}{_SEP}{_TIME_PART}$',
+        text
+    )
+    if match:
+        date = match.group(1)
+        return (date, match.group(2), date, match.group(3))
+
+    # Pattern 3: "06.01-07.01" (date range, full days)
+    match = re.match(
+        rf'^{_DATE_PART}{_SEP}{_DATE_PART}$',
+        text
+    )
+    if match:
+        return (match.group(1), "00:00", match.group(2), "23:59")
+
+    return None
+
 from sqlitemodel import SQL
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule
+from models import Reply, Settings, Schedule, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
 
 
 # =============================================================================
@@ -37,6 +88,7 @@ _owner_username: str | None = None
 _user_client = None  # User client for sending custom emojis
 _bot_username: str | None = None  # Bot username for user client to send messages
 _emoji_list_message_id: int | None = None  # Message ID of emoji list from user client
+_schedule_list_message_id: int | None = None  # Message ID of schedule list from user client
 
 
 def _utf16_len(text: str) -> int:
@@ -134,18 +186,105 @@ def get_back_keyboard():
     return [[Button.inline("« Назад", b"main")]]
 
 
+def _get_priority_name(priority: int) -> str:
+    """Get human-readable name for schedule priority."""
+    names = {
+        PRIORITY_REST: "отдых",
+        PRIORITY_MORNING: "утро",
+        PRIORITY_EVENING: "вечер",
+        PRIORITY_WEEKENDS: "выходные",
+        PRIORITY_WORK: "работа",
+        PRIORITY_MEETING: "звонок",
+        PRIORITY_OVERRIDE: "временное",
+    }
+    return names.get(priority, f"приоритет {priority}")
+
+
+def _format_schedule_rule_text(s: Schedule) -> str:
+    """Format schedule rule text (without emoji placeholder)."""
+    parts = []
+
+    # Time/date info
+    if s.is_override():
+        date_info = s.get_date_display()
+        parts.append(date_info)
+        if s.is_expired():
+            parts.append("(истекло)")
+    else:
+        parts.append(f"{s.get_days_display()} {s.time_start}—{s.time_end}")
+        # Priority/type name (only for regular rules, overrides are in separate section)
+        type_name = _get_priority_name(s.priority)
+        parts.append(f"• {type_name}")
+
+    return " ".join(parts)
+
+
+def _format_schedule_rule_fallback(s: Schedule) -> str:
+    """Format schedule rule for fallback display (no custom emoji)."""
+    emoji_short = s.emoji_id[-6:] if len(s.emoji_id) > 6 else s.emoji_id
+    return f"`#{s.id}` […{emoji_short}] {_format_schedule_rule_text(s)}"
+
+
 def get_schedule_keyboard():
     """Schedule management keyboard."""
     is_enabled = Schedule.is_scheduling_enabled()
     toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
     toggle_data = b"schedule_off" if is_enabled else b"schedule_on"
 
-    return [
+    buttons = [
         [Button.inline("📋 Список правил", b"schedule_list")],
+    ]
+
+    # Add work time edit button if work schedule exists
+    work = Schedule.get_work_schedule()
+    if work:
+        buttons.append([Button.inline(f"✏️ Рабочее время ({work.time_start}—{work.time_end})", b"schedule_work_edit")])
+
+        # Morning/evening emoji buttons
+        morning = Schedule.get_morning_schedule()
+        evening = Schedule.get_evening_schedule()
+        morning_text = "🌅 Утро ✓" if morning else "🌅 Утро"
+        evening_text = "🌙 Вечер ✓" if evening else "🌙 Вечер"
+        buttons.append([
+            Button.inline(morning_text, b"schedule_morning"),
+            Button.inline(evening_text, b"schedule_evening"),
+        ])
+
+    # Weekend and rest emoji buttons
+    weekend = Schedule.get_weekend_schedule()
+    rest = Schedule.get_rest_schedule()
+    weekend_text = "🎉 Выходные ✓" if weekend else "🎉 Выходные"
+    rest_text = "💤 Остальное ✓" if rest else "💤 Остальное"
+    buttons.append([
+        Button.inline(weekend_text, b"schedule_weekend"),
+        Button.inline(rest_text, b"schedule_rest"),
+    ])
+
+    # Add override button
+    buttons.append([Button.inline("➕ Добавить временное", b"schedule_override_add")])
+
+    buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
         [Button.inline("🗑 Очистить всё", b"schedule_clear_confirm")],
         [Button.inline("« Назад", b"main")],
-    ]
+    ])
+
+    return buttons
+
+
+def get_schedule_list_keyboard():
+    """Keyboard for schedule list view with delete buttons."""
+    buttons = []
+
+    # Delete buttons for overrides only
+    overrides = [s for s in Schedule.get_all() if s.is_override()]
+    if overrides:
+        del_buttons = [Button.inline(f"🗑 #{s.id}", f"schedule_del_{s.id}".encode()) for s in overrides[:8]]
+        for i in range(0, len(del_buttons), 4):
+            buttons.append(del_buttons[i:i+4])
+
+    buttons.append([Button.inline("« Назад", b"schedule")])
+    return buttons
 
 
 def get_meeting_keyboard():
@@ -232,6 +371,16 @@ def register_bot_handlers(bot, user_client=None):
                 logger.warning(f"Failed to delete emoji list message: {e}")
             _emoji_list_message_id = None
 
+    async def _delete_schedule_list_message():
+        """Delete the schedule list message from user client."""
+        global _schedule_list_message_id
+        if _user_client and _bot_username and _schedule_list_message_id:
+            try:
+                await _user_client.delete_messages(_bot_username, _schedule_list_message_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete schedule list message: {e}")
+            _schedule_list_message_id = None
+
     async def _clear_bot_chat_history():
         """Delete all messages in chat with bot to remove sensitive auth data."""
         if not _user_client or not _bot_username:
@@ -297,8 +446,9 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        # Delete emoji list message when returning to main menu
+        # Delete user client messages when returning to main menu
         await _delete_emoji_list_message()
+        await _delete_schedule_list_message()
 
         await event.edit(
             "🤖 **Панель управления автоответчиком**\n\n"
@@ -440,8 +590,9 @@ def register_bot_handlers(bot, user_client=None):
         # Clear add mode when returning to menu
         _pending_reply_add_mode.discard(event.sender_id)
 
-        # Delete emoji list message when returning to menu
+        # Clean up user client messages when switching sections
         await _delete_emoji_list_message()
+        await _delete_schedule_list_message()
 
         text = (
             "📝 **Автоответы**\n\n"
@@ -670,6 +821,10 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
+        # Clean up messages from other sections or list view
+        await _delete_emoji_list_message()
+        await _delete_schedule_list_message()
+
         is_enabled = Schedule.is_scheduling_enabled()
         status = "✅ включено" if is_enabled else "❌ выключено"
 
@@ -683,7 +838,7 @@ def register_bot_handlers(bot, user_client=None):
 
     @bot.on(events.CallbackQuery(data=b"schedule_list"))
     async def schedule_list_handler(event):
-        """List all schedule rules."""
+        """List all schedule rules with custom emoji display."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
@@ -698,25 +853,113 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
-        lines = ["📅 **Правила расписания:**\n"]
+        # Group by override vs regular, then sort by priority desc
+        overrides = sorted([s for s in schedules if s.is_override()], key=lambda x: -x.priority)
+        regular = sorted([s for s in schedules if not s.is_override()], key=lambda x: -x.priority)
+        all_rules = overrides + regular
 
-        overrides = [s for s in schedules if s.is_override()]
-        regular = [s for s in schedules if not s.is_override()]
+        # Try to display with custom emojis via user client
+        if _user_client and _bot_username:
+            try:
+                # Get unique emoji IDs
+                emoji_ids = list(set(int(s.emoji_id) for s in all_rules))
+                docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=emoji_ids))
+
+                # Map document_id -> alt emoji
+                alt_map = {}
+                for doc in docs:
+                    for attr in doc.attributes:
+                        if isinstance(attr, DocumentAttributeCustomEmoji):
+                            alt_map[doc.id] = attr.alt
+                            break
+
+                # Build text with custom emojis
+                text = "📅 Правила расписания\n"
+                entities = []
+
+                def add_section(title: str, rules: list):
+                    nonlocal text
+                    if not rules:
+                        return
+                    text += f"\n{title}"
+                    for s in rules:
+                        emoji_id = int(s.emoji_id)
+                        alt_emoji = alt_map.get(emoji_id, "⭐")
+
+                        # Format: "⭐ #1 ПН-ПТ 12:00—20:00 • работа"
+                        line_start = f"\n"
+                        emoji_offset = _utf16_len(text) + _utf16_len(line_start)
+                        rule_text = f" #{s.id}  {_format_schedule_rule_text(s)}"
+
+                        text += line_start + alt_emoji + rule_text
+
+                        entities.append(MessageEntityCustomEmoji(
+                            offset=emoji_offset,
+                            length=_utf16_len(alt_emoji),
+                            document_id=emoji_id
+                        ))
+
+                add_section("📆 Временные:", overrides)
+                if overrides and regular:
+                    text += "\n"  # Spacing between sections
+                add_section("🔄 Постоянные:", regular)
+
+                # Footer
+                text += "\n\n────────────────────"
+                text += "\n💡 Удаление через кнопки 🗑"
+
+                global _schedule_list_message_id
+
+                # Edit existing message or send new one
+                if _schedule_list_message_id:
+                    try:
+                        await _user_client.edit_message(
+                            _bot_username,
+                            _schedule_list_message_id,
+                            text,
+                            formatting_entities=entities
+                        )
+                    except Exception:
+                        # Message might be deleted, send new one
+                        msg = await _user_client.send_message(
+                            _bot_username,
+                            text,
+                            formatting_entities=entities
+                        )
+                        _schedule_list_message_id = msg.id
+                else:
+                    msg = await _user_client.send_message(
+                        _bot_username,
+                        text,
+                        formatting_entities=entities
+                    )
+                    _schedule_list_message_id = msg.id
+
+                # Bot shows only keyboard with delete buttons
+                await event.edit("⬆️ Список правил выше", buttons=get_schedule_list_keyboard())
+                return
+            except Exception as e:
+                logger.warning(f"Failed to send schedule via user client: {e}")
+
+        # Fallback: bot sends without custom emojis
+        lines = ["📅 **Правила расписания**\n"]
 
         if overrides:
-            lines.append("**🔴 Перекрытия:**")
+            lines.append("**📆 Временные:**")
             for s in overrides:
-                date_info = s.get_date_display()
-                expired = " ⚠️" if s.is_expired() else ""
-                lines.append(f"• #{s.id} {date_info}{expired}")
+                lines.append(_format_schedule_rule_fallback(s))
             lines.append("")
 
         if regular:
-            lines.append("**📋 Обычные:**")
+            lines.append("**🔄 Постоянные:**")
             for s in regular:
-                lines.append(f"• #{s.id} {s.get_days_display()} {s.time_start}-{s.time_end}")
+                lines.append(_format_schedule_rule_fallback(s))
+            lines.append("")
 
-        await event.edit('\n'.join(lines), buttons=get_schedule_keyboard())
+        lines.append("─" * 20)
+        lines.append("💡 Удаление через кнопки 🗑")
+
+        await event.edit('\n'.join(lines), buttons=get_schedule_list_keyboard())
 
     @bot.on(events.CallbackQuery(data=b"schedule_on"))
     async def schedule_enable(event):
@@ -776,6 +1019,222 @@ def register_bot_handlers(bot, user_client=None):
             "Все правила удалены.",
             buttons=get_schedule_keyboard()
         )
+
+    @bot.on(events.CallbackQuery(pattern=rb"schedule_del_(\d+)"))
+    async def schedule_delete_rule(event):
+        """Delete a specific schedule rule by ID."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        match = event.pattern_match
+        rule_id = int(match.group(1))
+
+        if not Schedule.delete_by_id(rule_id):
+            await event.answer("❌ Правило не найдено", alert=True)
+            return
+
+        logger.info(f"Schedule rule #{rule_id} deleted via bot")
+
+        await event.answer(f"✅ Правило #{rule_id} удалено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_work_edit"))
+    async def schedule_work_edit_start(event):
+        """Start editing work schedule time."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        work = Schedule.get_work_schedule()
+        if not work:
+            await event.answer("❌ Рабочее расписание не найдено", alert=True)
+            return
+
+        _pending_work_time_edit.add(event.sender_id)
+
+        await event.edit(
+            f"✏️ **Настройка рабочего времени**\n\n"
+            f"Текущее время: **{work.time_start}—{work.time_end}**\n"
+            f"Текущий эмодзи: `{work.emoji_id}`\n\n"
+            f"Отправьте:\n"
+            f"• Время в формате `09:00-18:00`\n"
+            f"• Или эмодзи для изменения статуса",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_work_edit_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_work_edit_cancel"))
+    async def schedule_work_edit_cancel(event):
+        """Cancel work schedule time editing."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_work_time_edit.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_morning"))
+    async def schedule_morning_start(event):
+        """Start setting morning emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        work = Schedule.get_work_schedule()
+        if not work:
+            await event.answer("❌ Сначала настройте рабочее время", alert=True)
+            return
+
+        morning = Schedule.get_morning_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{morning.emoji_id}`" if morning else ""
+
+        _pending_morning_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"🌅 **Эмодзи для утра**\n\n"
+            f"Время: **00:00—{work.time_start}** (ПН-ПТ){current_info}\n\n"
+            f"Отправьте эмодзи для утреннего статуса:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_morning_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_morning_cancel"))
+    async def schedule_morning_cancel(event):
+        """Cancel morning emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_morning_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_evening"))
+    async def schedule_evening_start(event):
+        """Start setting evening emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        work = Schedule.get_work_schedule()
+        if not work:
+            await event.answer("❌ Сначала настройте рабочее время", alert=True)
+            return
+
+        evening = Schedule.get_evening_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{evening.emoji_id}`" if evening else ""
+
+        _pending_evening_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"🌙 **Эмодзи для вечера**\n\n"
+            f"Время: **{work.time_end}—23:59** (ПН-ПТ){current_info}\n\n"
+            f"Отправьте эмодзи для вечернего статуса:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_evening_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_evening_cancel"))
+    async def schedule_evening_cancel(event):
+        """Cancel evening emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_evening_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_weekend"))
+    async def schedule_weekend_start(event):
+        """Start setting weekend emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        weekend = Schedule.get_weekend_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{weekend.emoji_id}`" if weekend else ""
+
+        _pending_weekend_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"🎉 **Эмодзи для выходных**\n\n"
+            f"ПТ вечер + СБ-ВС весь день{current_info}\n\n"
+            f"Отправьте эмодзи для выходных:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_weekend_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_weekend_cancel"))
+    async def schedule_weekend_cancel(event):
+        """Cancel weekend emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_weekend_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_rest"))
+    async def schedule_rest_start(event):
+        """Start setting rest/fallback emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        rest = Schedule.get_rest_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{rest.emoji_id}`" if rest else ""
+
+        _pending_rest_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"💤 **Эмодзи по умолчанию**\n\n"
+            f"Используется когда нет других правил{current_info}\n\n"
+            f"Отправьте эмодзи:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_rest_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_rest_cancel"))
+    async def schedule_rest_cancel(event):
+        """Cancel rest emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_rest_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_override_add"))
+    async def schedule_override_add_start(event):
+        """Start adding an override schedule."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_override_dates.add(event.sender_id)
+
+        await event.edit(
+            "➕ **Добавить временное правило**\n\n"
+            "Используется для отпуска, больничного и т.д.\n\n"
+            "Форматы:\n"
+            "• `06.01-07.01` — весь день\n"
+            "• `06.01 9:30-11:30` — время в один день\n"
+            "• `06.01 12:00 - 07.01 15:00` — диапазон",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_override_cancel"))
+    async def schedule_override_cancel(event):
+        """Cancel override creation."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_override_dates.discard(event.sender_id)
+        if event.sender_id in _pending_override_emoji:
+            del _pending_override_emoji[event.sender_id]
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
 
     # =========================================================================
     # Meeting
@@ -955,13 +1414,24 @@ def register_bot_handlers(bot, user_client=None):
         )
 
     # =========================================================================
-    # Text message handlers for setting replies
+    # Text message handlers for setting replies and schedule
     # =========================================================================
 
     # Store pending reply setup: {user_id: emoji_id}
     _pending_reply_setup: dict[int, int] = {}
     # Store users in "add mode" waiting for emoji
     _pending_reply_add_mode: set[int] = set()
+    # Store users waiting to input work schedule time
+    _pending_work_time_edit: set[int] = set()
+    # Store users waiting to input morning/evening emoji
+    _pending_morning_emoji: set[int] = set()
+    _pending_evening_emoji: set[int] = set()
+    # Store users waiting to input weekend/rest emoji
+    _pending_weekend_emoji: set[int] = set()
+    _pending_rest_emoji: set[int] = set()
+    # Store override creation state: {user_id: {"dates": (start, end)}} or {user_id: "dates"} for waiting dates
+    _pending_override_dates: set[int] = set()
+    _pending_override_emoji: dict[int, tuple[str, str]] = {}  # user_id -> (date_start, date_end)
 
     @bot.on(events.CallbackQuery(data=b"reply_add"))
     async def reply_add_start(event):
@@ -1173,9 +1643,277 @@ def register_bot_handlers(bot, user_client=None):
                 return
 
         # =====================================================================
-        # Reply setup flow (only for authorized owner)
+        # Reply/Schedule setup flow (only for authorized owner)
         # =====================================================================
         if not await _is_owner(event):
+            return
+
+        # Check if user is editing work schedule (time or emoji)
+        if event.sender_id in _pending_work_time_edit:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+            text = event.message.text.strip() if event.message.text else ""
+
+            work = Schedule.get_work_schedule()
+            if not work:
+                _pending_work_time_edit.discard(event.sender_id)
+                await event.respond(
+                    "❌ Рабочее расписание не найдено.",
+                    buttons=get_schedule_keyboard()
+                )
+                return
+
+            # Check if user sent emoji
+            if custom_emojis:
+                emoji_id = custom_emojis[0].document_id
+                work.emoji_id = str(emoji_id)
+                work.save()
+                _pending_work_time_edit.discard(event.sender_id)
+                logger.info(f"Work emoji updated to {emoji_id}")
+
+                await event.respond(
+                    f"✅ Эмодзи для работы изменён!",
+                    buttons=get_schedule_keyboard()
+                )
+                return
+
+            # Parse time format: "09:00-18:00" or "09:00 - 18:00"
+            match = TIME_RANGE_PATTERN.match(text)
+
+            if not match:
+                await event.respond(
+                    "❌ Неверный формат.\n\n"
+                    "Отправьте время `09:00-18:00` или эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_work_edit_cancel")]]
+                )
+                return
+
+            time_start = match.group(1)
+            time_end = match.group(2)
+
+            # Normalize to HH:MM format
+            time_start = ':'.join(p.zfill(2) for p in time_start.split(':'))
+            time_end = ':'.join(p.zfill(2) for p in time_end.split(':'))
+
+            # Update work schedule time
+            work.time_start = time_start
+            work.time_end = time_end
+            work.save()
+            logger.info(f"Work schedule time updated to {time_start}-{time_end}")
+
+            # Update related schedules to match work time
+            updates = []
+
+            # Friday weekend starts when work ends
+            friday_weekend = Schedule.get_friday_weekend_schedule()
+            if friday_weekend and friday_weekend.time_start != time_end:
+                friday_weekend.time_start = time_end
+                friday_weekend.save()
+                updates.append(f"📅 Выходные в ПТ с **{time_end}**")
+                logger.info(f"Friday weekend start time updated to {time_end}")
+
+            # Morning ends when work starts
+            morning = Schedule.get_morning_schedule()
+            if morning and morning.time_end != time_start:
+                morning.time_end = time_start
+                morning.save()
+                updates.append(f"🌅 Утро до **{time_start}**")
+                logger.info(f"Morning end time updated to {time_start}")
+
+            # Evening starts when work ends
+            evening = Schedule.get_evening_schedule()
+            if evening and evening.time_start != time_end:
+                evening.time_start = time_end
+                evening.save()
+                updates.append(f"🌙 Вечер с **{time_end}**")
+                logger.info(f"Evening start time updated to {time_end}")
+
+            _pending_work_time_edit.discard(event.sender_id)
+
+            msg = f"✅ Рабочее время изменено!\n\nНовое время: **{time_start}—{time_end}**"
+            if updates:
+                msg += "\n\n" + "\n".join(updates)
+
+            await event.respond(msg, buttons=get_schedule_keyboard())
+            return
+
+        # Check if user is setting morning emoji
+        if event.sender_id in _pending_morning_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_morning_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            work = Schedule.get_work_schedule()
+            work_start = work.time_start if work else "09:00"
+
+            Schedule.set_morning_emoji(emoji_id, work_start)
+            _pending_morning_emoji.discard(event.sender_id)
+            logger.info(f"Morning emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи для утра установлен!\n\n"
+                f"Время: **00:00—{work_start}** (ПН-ПТ)",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting evening emoji
+        if event.sender_id in _pending_evening_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_evening_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            work = Schedule.get_work_schedule()
+            work_end = work.time_end if work else "18:00"
+
+            Schedule.set_evening_emoji(emoji_id, work_end)
+            _pending_evening_emoji.discard(event.sender_id)
+            logger.info(f"Evening emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи для вечера установлен!\n\n"
+                f"Время: **{work_end}—23:59** (ПН-ПТ)",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting weekend emoji
+        if event.sender_id in _pending_weekend_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_weekend_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            work = Schedule.get_work_schedule()
+            work_end = work.time_end if work else "18:00"
+
+            Schedule.set_weekend_emoji(emoji_id, work_end)
+            _pending_weekend_emoji.discard(event.sender_id)
+            logger.info(f"Weekend emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи для выходных установлен!\n\n"
+                f"ПТ с **{work_end}** + СБ-ВС весь день",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting rest emoji
+        if event.sender_id in _pending_rest_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_rest_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+
+            Schedule.set_rest_emoji(emoji_id)
+            _pending_rest_emoji.discard(event.sender_id)
+            logger.info(f"Rest emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи по умолчанию установлен!",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is entering override dates
+        if event.sender_id in _pending_override_dates:
+            text = event.message.text.strip() if event.message.text else ""
+            parsed = parse_datetime_range(text)
+
+            if not parsed:
+                await event.respond(
+                    "❌ Неверный формат.\n\n"
+                    "Примеры:\n"
+                    "• `06.01-07.01` — весь день\n"
+                    "• `06.01 9:30-11:30` — время в один день\n"
+                    "• `06.01 12:00 - 07.01 15:00` — диапазон",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+                )
+                return
+
+            date_start, time_start, date_end, time_end = parsed
+
+            # Normalize time format
+            time_start = ':'.join(p.zfill(2) for p in time_start.split(':'))
+            time_end = ':'.join(p.zfill(2) for p in time_end.split(':'))
+
+            # Move to emoji input stage
+            _pending_override_dates.discard(event.sender_id)
+            _pending_override_emoji[event.sender_id] = (date_start, time_start, date_end, time_end)
+
+            # Format display
+            if time_start == "00:00" and time_end == "23:59":
+                period_display = f"**{date_start}** — **{date_end}**"
+            elif date_start == date_end:
+                period_display = f"**{date_start}** с **{time_start}** до **{time_end}**"
+            else:
+                period_display = f"**{date_start} {time_start}** — **{date_end} {time_end}**"
+
+            await event.respond(
+                f"📅 Период: {period_display}\n\n"
+                f"Теперь отправьте эмодзи:",
+                buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+            )
+            return
+
+        # Check if user is entering override emoji
+        if event.sender_id in _pending_override_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_override_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            date_start, time_start, date_end, time_end = _pending_override_emoji.pop(event.sender_id)
+
+            Schedule.create_override(emoji_id, date_start, date_end, time_start, time_end)
+            logger.info(f"Override created: {date_start} {time_start} - {date_end} {time_end} with emoji {emoji_id}")
+
+            # Format display
+            if time_start == "00:00" and time_end == "23:59":
+                period_display = f"**{date_start}** — **{date_end}**"
+            elif date_start == date_end:
+                period_display = f"**{date_start}** с **{time_start}** до **{time_end}**"
+            else:
+                period_display = f"**{date_start} {time_start}** — **{date_end} {time_end}**"
+
+            await event.respond(
+                f"✅ Временное правило создано!\n\n"
+                f"📅 {period_display}",
+                buttons=get_schedule_keyboard()
+            )
             return
 
         # Check if we have pending emoji (waiting for reply text) - FIRST!
