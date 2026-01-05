@@ -1398,13 +1398,22 @@ def register_bot_handlers(bot, user_client=None):
                 work.save()
                 logger.info(f"Work schedule time updated to {time_start}-{time_end}")
 
+                # Also update Friday weekend start time to match work end time
+                friday_weekend = Schedule.get_friday_weekend_schedule()
+                weekend_updated = False
+                if friday_weekend and friday_weekend.time_start != time_end:
+                    friday_weekend.time_start = time_end
+                    friday_weekend.save()
+                    weekend_updated = True
+                    logger.info(f"Friday weekend start time updated to {time_end}")
+
                 _pending_work_time_edit.discard(event.sender_id)
 
-                await event.respond(
-                    f"✅ Рабочее время изменено!\n\n"
-                    f"Новое время: **{time_start}—{time_end}**",
-                    buttons=get_schedule_keyboard()
-                )
+                msg = f"✅ Рабочее время изменено!\n\nНовое время: **{time_start}—{time_end}**"
+                if weekend_updated:
+                    msg += f"\n\n📅 Выходные в ПТ теперь с **{time_end}**"
+
+                await event.respond(msg, buttons=get_schedule_keyboard())
             else:
                 _pending_work_time_edit.discard(event.sender_id)
                 await event.respond(

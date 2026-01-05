@@ -409,6 +409,19 @@ class Schedule(Model):
         work = Schedule.get_work_schedule()
         return int(work.emoji_id) if work else None
 
+    @staticmethod
+    def get_friday_weekend_schedule():
+        """Get the weekend schedule rule that includes Friday (day 4).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_WEEKENDS and 4 in rule.get_days_list():
+                return rule
+        return None
+
     # Meeting management methods
     @staticmethod
     def get_active_meeting():
