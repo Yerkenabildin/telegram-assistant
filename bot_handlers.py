@@ -24,7 +24,7 @@ from sqlitemodel import SQL
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule, PRIORITY_REST, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
+from models import Reply, Settings, Schedule, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
 
 
 # =============================================================================
@@ -144,6 +144,8 @@ def _get_priority_name(priority: int) -> str:
     """Get human-readable name for schedule priority."""
     names = {
         PRIORITY_REST: "отдых",
+        PRIORITY_MORNING: "утро",
+        PRIORITY_EVENING: "вечер",
         PRIORITY_WEEKENDS: "выходные",
         PRIORITY_WORK: "работа",
         PRIORITY_MEETING: "звонок",
@@ -192,6 +194,16 @@ def get_schedule_keyboard():
     work = Schedule.get_work_schedule()
     if work:
         buttons.append([Button.inline(f"✏️ Рабочее время ({work.time_start}—{work.time_end})", b"schedule_work_edit")])
+
+        # Morning/evening emoji buttons
+        morning = Schedule.get_morning_schedule()
+        evening = Schedule.get_evening_schedule()
+        morning_text = "🌅 Утро ✓" if morning else "🌅 Утро"
+        evening_text = "🌙 Вечер ✓" if evening else "🌙 Вечер"
+        buttons.append([
+            Button.inline(morning_text, b"schedule_morning"),
+            Button.inline(evening_text, b"schedule_evening"),
+        ])
 
     buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
@@ -965,6 +977,76 @@ def register_bot_handlers(bot, user_client=None):
         await event.answer("❌ Отменено")
         await schedule_menu(event)
 
+    @bot.on(events.CallbackQuery(data=b"schedule_morning"))
+    async def schedule_morning_start(event):
+        """Start setting morning emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        work = Schedule.get_work_schedule()
+        if not work:
+            await event.answer("❌ Сначала настройте рабочее время", alert=True)
+            return
+
+        morning = Schedule.get_morning_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{morning.emoji_id}`" if morning else ""
+
+        _pending_morning_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"🌅 **Эмодзи для утра**\n\n"
+            f"Время: **00:00—{work.time_start}** (ПН-ПТ){current_info}\n\n"
+            f"Отправьте эмодзи для утреннего статуса:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_morning_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_morning_cancel"))
+    async def schedule_morning_cancel(event):
+        """Cancel morning emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_morning_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_evening"))
+    async def schedule_evening_start(event):
+        """Start setting evening emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        work = Schedule.get_work_schedule()
+        if not work:
+            await event.answer("❌ Сначала настройте рабочее время", alert=True)
+            return
+
+        evening = Schedule.get_evening_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{evening.emoji_id}`" if evening else ""
+
+        _pending_evening_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"🌙 **Эмодзи для вечера**\n\n"
+            f"Время: **{work.time_end}—23:59** (ПН-ПТ){current_info}\n\n"
+            f"Отправьте эмодзи для вечернего статуса:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_evening_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_evening_cancel"))
+    async def schedule_evening_cancel(event):
+        """Cancel evening emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_evening_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
     # =========================================================================
     # Meeting
     # =========================================================================
@@ -1152,6 +1234,9 @@ def register_bot_handlers(bot, user_client=None):
     _pending_reply_add_mode: set[int] = set()
     # Store users waiting to input work schedule time
     _pending_work_time_edit: set[int] = set()
+    # Store users waiting to input morning/evening emoji
+    _pending_morning_emoji: set[int] = set()
+    _pending_evening_emoji: set[int] = set()
 
     @bot.on(events.CallbackQuery(data=b"reply_add"))
     async def reply_add_start(event):
@@ -1398,20 +1483,38 @@ def register_bot_handlers(bot, user_client=None):
                 work.save()
                 logger.info(f"Work schedule time updated to {time_start}-{time_end}")
 
-                # Also update Friday weekend start time to match work end time
+                # Update related schedules to match work time
+                updates = []
+
+                # Friday weekend starts when work ends
                 friday_weekend = Schedule.get_friday_weekend_schedule()
-                weekend_updated = False
                 if friday_weekend and friday_weekend.time_start != time_end:
                     friday_weekend.time_start = time_end
                     friday_weekend.save()
-                    weekend_updated = True
+                    updates.append(f"📅 Выходные в ПТ с **{time_end}**")
                     logger.info(f"Friday weekend start time updated to {time_end}")
+
+                # Morning ends when work starts
+                morning = Schedule.get_morning_schedule()
+                if morning and morning.time_end != time_start:
+                    morning.time_end = time_start
+                    morning.save()
+                    updates.append(f"🌅 Утро до **{time_start}**")
+                    logger.info(f"Morning end time updated to {time_start}")
+
+                # Evening starts when work ends
+                evening = Schedule.get_evening_schedule()
+                if evening and evening.time_start != time_end:
+                    evening.time_start = time_end
+                    evening.save()
+                    updates.append(f"🌙 Вечер с **{time_end}**")
+                    logger.info(f"Evening start time updated to {time_end}")
 
                 _pending_work_time_edit.discard(event.sender_id)
 
                 msg = f"✅ Рабочее время изменено!\n\nНовое время: **{time_start}—{time_end}**"
-                if weekend_updated:
-                    msg += f"\n\n📅 Выходные в ПТ теперь с **{time_end}**"
+                if updates:
+                    msg += "\n\n" + "\n".join(updates)
 
                 await event.respond(msg, buttons=get_schedule_keyboard())
             else:
@@ -1420,6 +1523,60 @@ def register_bot_handlers(bot, user_client=None):
                     "❌ Рабочее расписание не найдено.",
                     buttons=get_schedule_keyboard()
                 )
+            return
+
+        # Check if user is setting morning emoji
+        if event.sender_id in _pending_morning_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_morning_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            work = Schedule.get_work_schedule()
+            work_start = work.time_start if work else "09:00"
+
+            Schedule.set_morning_emoji(emoji_id, work_start)
+            _pending_morning_emoji.discard(event.sender_id)
+            logger.info(f"Morning emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи для утра установлен!\n\n"
+                f"Время: **00:00—{work_start}** (ПН-ПТ)",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting evening emoji
+        if event.sender_id in _pending_evening_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_evening_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            work = Schedule.get_work_schedule()
+            work_end = work.time_end if work else "18:00"
+
+            Schedule.set_evening_emoji(emoji_id, work_end)
+            _pending_evening_emoji.discard(event.sender_id)
+            logger.info(f"Evening emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи для вечера установлен!\n\n"
+                f"Время: **{work_end}—23:59** (ПН-ПТ)",
+                buttons=get_schedule_keyboard()
+            )
             return
 
         # Check if we have pending emoji (waiting for reply text) - FIRST!

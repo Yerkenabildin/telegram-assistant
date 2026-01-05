@@ -37,6 +37,8 @@ DAY_DISPLAY = ['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС']
 
 # Priority levels
 PRIORITY_REST = 1        # Fallback/rest rules
+PRIORITY_MORNING = 2     # Morning (before work) on weekdays
+PRIORITY_EVENING = 3     # Evening (after work) on weekdays
 PRIORITY_WEEKENDS = 8    # Weekends schedule
 PRIORITY_WORK = 10       # Work schedule
 PRIORITY_MEETING = 50    # Active meeting/call (via API)
@@ -421,6 +423,78 @@ class Schedule(Model):
             if rule.priority == PRIORITY_WEEKENDS and 4 in rule.get_days_list():
                 return rule
         return None
+
+    @staticmethod
+    def get_morning_schedule():
+        """Get the morning schedule rule (before work on weekdays).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_MORNING:
+                return rule
+        return None
+
+    @staticmethod
+    def get_evening_schedule():
+        """Get the evening schedule rule (after work on weekdays).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_EVENING:
+                return rule
+        return None
+
+    @staticmethod
+    def set_morning_emoji(emoji_id, work_start: str = "09:00"):
+        """Set or update morning schedule emoji.
+
+        Args:
+            emoji_id: Emoji document ID
+            work_start: Work start time (morning ends at this time)
+        """
+        morning = Schedule.get_morning_schedule()
+        if morning:
+            morning.emoji_id = str(emoji_id)
+            morning.time_end = work_start
+            morning.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[0, 1, 2, 3, 4],  # Mon-Fri
+                time_start="00:00",
+                time_end=work_start,
+                priority=PRIORITY_MORNING,
+                name="morning"
+            )
+
+    @staticmethod
+    def set_evening_emoji(emoji_id, work_end: str = "18:00"):
+        """Set or update evening schedule emoji.
+
+        Args:
+            emoji_id: Emoji document ID
+            work_end: Work end time (evening starts at this time)
+        """
+        evening = Schedule.get_evening_schedule()
+        if evening:
+            evening.emoji_id = str(emoji_id)
+            evening.time_start = work_end
+            evening.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[0, 1, 2, 3, 4],  # Mon-Fri
+                time_start=work_end,
+                time_end="23:59",
+                priority=PRIORITY_EVENING,
+                name="evening"
+            )
 
     # Meeting management methods
     @staticmethod
