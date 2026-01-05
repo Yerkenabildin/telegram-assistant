@@ -19,7 +19,7 @@ from sqlitemodel import SQL
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule
+from models import Reply, Settings, Schedule, PRIORITY_REST, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
 
 
 # =============================================================================
@@ -132,6 +132,45 @@ def get_main_menu_keyboard():
 def get_back_keyboard():
     """Back to main menu keyboard."""
     return [[Button.inline("« Назад", b"main")]]
+
+
+def _get_priority_name(priority: int) -> str:
+    """Get human-readable name for schedule priority."""
+    names = {
+        PRIORITY_REST: "отдых",
+        PRIORITY_WEEKENDS: "выходные",
+        PRIORITY_WORK: "работа",
+        PRIORITY_MEETING: "звонок",
+        PRIORITY_OVERRIDE: "временное",
+    }
+    return names.get(priority, f"приоритет {priority}")
+
+
+def _format_schedule_rule(s: Schedule) -> str:
+    """Format a single schedule rule for display."""
+    parts = []
+
+    # ID
+    parts.append(f"`#{s.id}`")
+
+    # Emoji ID (shortened for readability)
+    emoji_short = s.emoji_id[-6:] if len(s.emoji_id) > 6 else s.emoji_id
+    parts.append(f"[…{emoji_short}]")
+
+    # Time/date info
+    if s.is_override():
+        date_info = s.get_date_display()
+        parts.append(date_info)
+        if s.is_expired():
+            parts.append("(истекло)")
+    else:
+        parts.append(f"{s.get_days_display()} {s.time_start}—{s.time_end}")
+
+    # Priority/type name
+    type_name = _get_priority_name(s.priority)
+    parts.append(f"• {type_name}")
+
+    return " ".join(parts)
 
 
 def get_schedule_keyboard():
@@ -698,23 +737,28 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
-        lines = ["📅 **Правила расписания:**\n"]
+        lines = ["📅 **Правила расписания**\n"]
 
-        overrides = [s for s in schedules if s.is_override()]
-        regular = [s for s in schedules if not s.is_override()]
+        # Group by override vs regular, then sort by priority desc
+        overrides = sorted([s for s in schedules if s.is_override()], key=lambda x: -x.priority)
+        regular = sorted([s for s in schedules if not s.is_override()], key=lambda x: -x.priority)
 
         if overrides:
-            lines.append("**🔴 Перекрытия:**")
+            lines.append("**📆 Временные правила:**")
             for s in overrides:
-                date_info = s.get_date_display()
-                expired = " ⚠️" if s.is_expired() else ""
-                lines.append(f"• #{s.id} {date_info}{expired}")
+                lines.append(_format_schedule_rule(s))
             lines.append("")
 
         if regular:
-            lines.append("**📋 Обычные:**")
+            lines.append("**🔄 Постоянные правила:**")
             for s in regular:
-                lines.append(f"• #{s.id} {s.get_days_display()} {s.time_start}-{s.time_end}")
+                lines.append(_format_schedule_rule(s))
+            lines.append("")
+
+        # Footer with hints
+        lines.append("─" * 20)
+        lines.append("💡 Управление через настроечный чат:")
+        lines.append("`/schedule del <ID>` — удалить правило")
 
         await event.edit('\n'.join(lines), buttons=get_schedule_keyboard())
 
