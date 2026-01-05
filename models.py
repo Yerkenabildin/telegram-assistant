@@ -496,6 +496,97 @@ class Schedule(Model):
                 name="evening"
             )
 
+    @staticmethod
+    def get_weekend_schedule():
+        """Get the weekend schedule rule for Sat-Sun (full day).
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            # Weekend rule: priority WEEKENDS, covers Sat-Sun (days 5,6)
+            if rule.priority == PRIORITY_WEEKENDS and 5 in rule.get_days_list() and 6 in rule.get_days_list():
+                return rule
+        return None
+
+    @staticmethod
+    def get_rest_schedule():
+        """Get the rest/fallback schedule rule.
+
+        Returns:
+            Schedule object or None if no such rule exists.
+        """
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_REST:
+                return rule
+        return None
+
+    @staticmethod
+    def set_weekend_emoji(emoji_id, work_end: str = "18:00"):
+        """Set or update weekend schedule emoji.
+
+        Creates two rules:
+        - Friday evening (work_end - 23:59)
+        - Sat-Sun all day
+
+        Args:
+            emoji_id: Emoji document ID
+            work_end: Work end time (Friday weekend starts at this time)
+        """
+        # Update or create Friday weekend rule
+        friday = Schedule.get_friday_weekend_schedule()
+        if friday:
+            friday.emoji_id = str(emoji_id)
+            friday.time_start = work_end
+            friday.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[4],  # Friday only
+                time_start=work_end,
+                time_end="23:59",
+                priority=PRIORITY_WEEKENDS,
+                name="weekends"
+            )
+
+        # Update or create Sat-Sun rule
+        weekend = Schedule.get_weekend_schedule()
+        if weekend:
+            weekend.emoji_id = str(emoji_id)
+            weekend.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[5, 6],  # Sat-Sun
+                time_start="00:00",
+                time_end="23:59",
+                priority=PRIORITY_WEEKENDS,
+                name="weekends"
+            )
+
+    @staticmethod
+    def set_rest_emoji(emoji_id):
+        """Set or update rest/fallback schedule emoji.
+
+        Args:
+            emoji_id: Emoji document ID
+        """
+        rest = Schedule.get_rest_schedule()
+        if rest:
+            rest.emoji_id = str(emoji_id)
+            rest.save()
+        else:
+            Schedule.create(
+                emoji_id=emoji_id,
+                days=[0, 1, 2, 3, 4, 5, 6],  # Every day
+                time_start="00:00",
+                time_end="23:59",
+                priority=PRIORITY_REST,
+                name="rest"
+            )
+
     # Meeting management methods
     @staticmethod
     def get_active_meeting():

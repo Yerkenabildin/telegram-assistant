@@ -205,6 +205,16 @@ def get_schedule_keyboard():
             Button.inline(evening_text, b"schedule_evening"),
         ])
 
+    # Weekend and rest emoji buttons
+    weekend = Schedule.get_weekend_schedule()
+    rest = Schedule.get_rest_schedule()
+    weekend_text = "🎉 Выходные ✓" if weekend else "🎉 Выходные"
+    rest_text = "💤 Остальное ✓" if rest else "💤 Остальное"
+    buttons.append([
+        Button.inline(weekend_text, b"schedule_weekend"),
+        Button.inline(rest_text, b"schedule_rest"),
+    ])
+
     buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
         [Button.inline("🗑 Очистить всё", b"schedule_clear_confirm")],
@@ -1047,6 +1057,66 @@ def register_bot_handlers(bot, user_client=None):
         await event.answer("❌ Отменено")
         await schedule_menu(event)
 
+    @bot.on(events.CallbackQuery(data=b"schedule_weekend"))
+    async def schedule_weekend_start(event):
+        """Start setting weekend emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        weekend = Schedule.get_weekend_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{weekend.emoji_id}`" if weekend else ""
+
+        _pending_weekend_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"🎉 **Эмодзи для выходных**\n\n"
+            f"ПТ вечер + СБ-ВС весь день{current_info}\n\n"
+            f"Отправьте эмодзи для выходных:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_weekend_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_weekend_cancel"))
+    async def schedule_weekend_cancel(event):
+        """Cancel weekend emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_weekend_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"schedule_rest"))
+    async def schedule_rest_start(event):
+        """Start setting rest/fallback emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        rest = Schedule.get_rest_schedule()
+        current_info = f"\n\nТекущий эмодзи: `{rest.emoji_id}`" if rest else ""
+
+        _pending_rest_emoji.add(event.sender_id)
+
+        await event.edit(
+            f"💤 **Эмодзи по умолчанию**\n\n"
+            f"Используется когда нет других правил{current_info}\n\n"
+            f"Отправьте эмодзи:",
+            buttons=[[Button.inline("❌ Отмена", b"schedule_rest_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"schedule_rest_cancel"))
+    async def schedule_rest_cancel(event):
+        """Cancel rest emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_rest_emoji.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await schedule_menu(event)
+
     # =========================================================================
     # Meeting
     # =========================================================================
@@ -1237,6 +1307,9 @@ def register_bot_handlers(bot, user_client=None):
     # Store users waiting to input morning/evening emoji
     _pending_morning_emoji: set[int] = set()
     _pending_evening_emoji: set[int] = set()
+    # Store users waiting to input weekend/rest emoji
+    _pending_weekend_emoji: set[int] = set()
+    _pending_rest_emoji: set[int] = set()
 
     @bot.on(events.CallbackQuery(data=b"reply_add"))
     async def reply_add_start(event):
@@ -1575,6 +1648,57 @@ def register_bot_handlers(bot, user_client=None):
             await event.respond(
                 f"✅ Эмодзи для вечера установлен!\n\n"
                 f"Время: **{work_end}—23:59** (ПН-ПТ)",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting weekend emoji
+        if event.sender_id in _pending_weekend_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_weekend_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+            work = Schedule.get_work_schedule()
+            work_end = work.time_end if work else "18:00"
+
+            Schedule.set_weekend_emoji(emoji_id, work_end)
+            _pending_weekend_emoji.discard(event.sender_id)
+            logger.info(f"Weekend emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи для выходных установлен!\n\n"
+                f"ПТ с **{work_end}** + СБ-ВС весь день",
+                buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting rest emoji
+        if event.sender_id in _pending_rest_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"schedule_rest_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+
+            Schedule.set_rest_emoji(emoji_id)
+            _pending_rest_emoji.discard(event.sender_id)
+            logger.info(f"Rest emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Эмодзи по умолчанию установлен!",
                 buttons=get_schedule_keyboard()
             )
             return
