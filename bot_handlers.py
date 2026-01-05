@@ -263,6 +263,14 @@ def get_schedule_keyboard():
     # Add override button
     buttons.append([Button.inline("➕ Добавить временное", b"schedule_override_add")])
 
+    # Add delete buttons for overrides (temporary rules)
+    overrides = [s for s in Schedule.get_all() if s.is_override()]
+    if overrides:
+        # Show up to 4 delete buttons per row
+        del_buttons = [Button.inline(f"🗑 #{s.id}", f"schedule_del_{s.id}".encode()) for s in overrides[:8]]
+        for i in range(0, len(del_buttons), 4):
+            buttons.append(del_buttons[i:i+4])
+
     buttons.extend([
         [Button.inline(toggle_text, toggle_data)],
         [Button.inline("🗑 Очистить всё", b"schedule_clear_confirm")],
@@ -890,7 +898,7 @@ def register_bot_handlers(bot, user_client=None):
 
                 # Footer
                 text += "\n\n────────────────────"
-                text += "\n💡 /schedule del <ID>"
+                text += "\n💡 Удаление через кнопки 🗑"
 
                 global _schedule_list_message_id
 
@@ -941,7 +949,7 @@ def register_bot_handlers(bot, user_client=None):
             lines.append("")
 
         lines.append("─" * 20)
-        lines.append("💡 `/schedule del <ID>`")
+        lines.append("💡 Удаление через кнопки 🗑")
 
         await event.edit('\n'.join(lines), buttons=get_schedule_keyboard())
 
@@ -1003,6 +1011,25 @@ def register_bot_handlers(bot, user_client=None):
             "Все правила удалены.",
             buttons=get_schedule_keyboard()
         )
+
+    @bot.on(events.CallbackQuery(pattern=rb"schedule_del_(\d+)"))
+    async def schedule_delete_rule(event):
+        """Delete a specific schedule rule by ID."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        match = event.pattern_match
+        rule_id = int(match.group(1))
+
+        if not Schedule.delete_by_id(rule_id):
+            await event.answer("❌ Правило не найдено", alert=True)
+            return
+
+        logger.info(f"Schedule rule #{rule_id} deleted via bot")
+
+        await event.answer(f"✅ Правило #{rule_id} удалено")
+        await schedule_menu(event)
 
     @bot.on(events.CallbackQuery(data=b"schedule_work_edit"))
     async def schedule_work_edit_start(event):
