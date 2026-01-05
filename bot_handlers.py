@@ -37,6 +37,7 @@ _owner_username: str | None = None
 _user_client = None  # User client for sending custom emojis
 _bot_username: str | None = None  # Bot username for user client to send messages
 _emoji_list_message_id: int | None = None  # Message ID of emoji list from user client
+_schedule_list_message_id: int | None = None  # Message ID of schedule list from user client
 
 
 def _utf16_len(text: str) -> int:
@@ -146,16 +147,9 @@ def _get_priority_name(priority: int) -> str:
     return names.get(priority, f"приоритет {priority}")
 
 
-def _format_schedule_rule(s: Schedule) -> str:
-    """Format a single schedule rule for display."""
+def _format_schedule_rule_text(s: Schedule) -> str:
+    """Format schedule rule text (without emoji placeholder)."""
     parts = []
-
-    # ID
-    parts.append(f"`#{s.id}`")
-
-    # Emoji ID (shortened for readability)
-    emoji_short = s.emoji_id[-6:] if len(s.emoji_id) > 6 else s.emoji_id
-    parts.append(f"[…{emoji_short}]")
 
     # Time/date info
     if s.is_override():
@@ -171,6 +165,12 @@ def _format_schedule_rule(s: Schedule) -> str:
     parts.append(f"• {type_name}")
 
     return " ".join(parts)
+
+
+def _format_schedule_rule_fallback(s: Schedule) -> str:
+    """Format schedule rule for fallback display (no custom emoji)."""
+    emoji_short = s.emoji_id[-6:] if len(s.emoji_id) > 6 else s.emoji_id
+    return f"`#{s.id}` […{emoji_short}] {_format_schedule_rule_text(s)}"
 
 
 def get_schedule_keyboard():
@@ -271,6 +271,16 @@ def register_bot_handlers(bot, user_client=None):
                 logger.warning(f"Failed to delete emoji list message: {e}")
             _emoji_list_message_id = None
 
+    async def _delete_schedule_list_message():
+        """Delete the schedule list message from user client."""
+        global _schedule_list_message_id
+        if _user_client and _bot_username and _schedule_list_message_id:
+            try:
+                await _user_client.delete_messages(_bot_username, _schedule_list_message_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete schedule list message: {e}")
+            _schedule_list_message_id = None
+
     async def _clear_bot_chat_history():
         """Delete all messages in chat with bot to remove sensitive auth data."""
         if not _user_client or not _bot_username:
@@ -336,8 +346,9 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        # Delete emoji list message when returning to main menu
+        # Delete user client messages when returning to main menu
         await _delete_emoji_list_message()
+        await _delete_schedule_list_message()
 
         await event.edit(
             "🤖 **Панель управления автоответчиком**\n\n"
@@ -479,8 +490,9 @@ def register_bot_handlers(bot, user_client=None):
         # Clear add mode when returning to menu
         _pending_reply_add_mode.discard(event.sender_id)
 
-        # Delete emoji list message when returning to menu
+        # Clean up user client messages when switching sections
         await _delete_emoji_list_message()
+        await _delete_schedule_list_message()
 
         text = (
             "📝 **Автоответы**\n\n"
@@ -709,6 +721,9 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
+        # Clean up other section's message
+        await _delete_emoji_list_message()
+
         is_enabled = Schedule.is_scheduling_enabled()
         status = "✅ включено" if is_enabled else "❌ выключено"
 
@@ -722,7 +737,7 @@ def register_bot_handlers(bot, user_client=None):
 
     @bot.on(events.CallbackQuery(data=b"schedule_list"))
     async def schedule_list_handler(event):
-        """List all schedule rules."""
+        """List all schedule rules with custom emoji display."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
@@ -737,28 +752,109 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
-        lines = ["📅 **Правила расписания**\n"]
-
         # Group by override vs regular, then sort by priority desc
         overrides = sorted([s for s in schedules if s.is_override()], key=lambda x: -x.priority)
         regular = sorted([s for s in schedules if not s.is_override()], key=lambda x: -x.priority)
+        all_rules = overrides + regular
+
+        # Try to display with custom emojis via user client
+        if _user_client and _bot_username:
+            try:
+                # Get unique emoji IDs
+                emoji_ids = list(set(int(s.emoji_id) for s in all_rules))
+                docs = await _user_client(GetCustomEmojiDocumentsRequest(document_id=emoji_ids))
+
+                # Map document_id -> alt emoji
+                alt_map = {}
+                for doc in docs:
+                    for attr in doc.attributes:
+                        if isinstance(attr, DocumentAttributeCustomEmoji):
+                            alt_map[doc.id] = attr.alt
+                            break
+
+                # Build text with custom emojis
+                text = "📅 Правила расписания\n"
+                entities = []
+
+                def add_section(title: str, rules: list):
+                    nonlocal text
+                    if not rules:
+                        return
+                    text += f"\n{title}\n"
+                    for s in rules:
+                        emoji_id = int(s.emoji_id)
+                        alt_emoji = alt_map.get(emoji_id, "⭐")
+
+                        # Format: "⭐ #1 ПН-ПТ 12:00—20:00 • работа"
+                        line_start = f"\n"
+                        emoji_offset = _utf16_len(text) + _utf16_len(line_start)
+                        rule_text = f" #{s.id}  {_format_schedule_rule_text(s)}"
+
+                        text += line_start + alt_emoji + rule_text
+
+                        entities.append(MessageEntityCustomEmoji(
+                            offset=emoji_offset,
+                            length=_utf16_len(alt_emoji),
+                            document_id=emoji_id
+                        ))
+
+                add_section("📆 Временные:", overrides)
+                add_section("🔄 Постоянные:", regular)
+
+                # Footer
+                text += "\n\n────────────────────"
+                text += "\n💡 /schedule del <ID>"
+
+                global _schedule_list_message_id
+
+                # Edit existing message or send new one
+                if _schedule_list_message_id:
+                    try:
+                        await _user_client.edit_message(
+                            _bot_username,
+                            _schedule_list_message_id,
+                            text,
+                            formatting_entities=entities
+                        )
+                    except Exception:
+                        # Message might be deleted, send new one
+                        msg = await _user_client.send_message(
+                            _bot_username,
+                            text,
+                            formatting_entities=entities
+                        )
+                        _schedule_list_message_id = msg.id
+                else:
+                    msg = await _user_client.send_message(
+                        _bot_username,
+                        text,
+                        formatting_entities=entities
+                    )
+                    _schedule_list_message_id = msg.id
+
+                # Bot shows only keyboard
+                await event.edit("⬆️ Список правил выше", buttons=get_schedule_keyboard())
+                return
+            except Exception as e:
+                logger.warning(f"Failed to send schedule via user client: {e}")
+
+        # Fallback: bot sends without custom emojis
+        lines = ["📅 **Правила расписания**\n"]
 
         if overrides:
-            lines.append("**📆 Временные правила:**")
+            lines.append("**📆 Временные:**")
             for s in overrides:
-                lines.append(_format_schedule_rule(s))
+                lines.append(_format_schedule_rule_fallback(s))
             lines.append("")
 
         if regular:
-            lines.append("**🔄 Постоянные правила:**")
+            lines.append("**🔄 Постоянные:**")
             for s in regular:
-                lines.append(_format_schedule_rule(s))
+                lines.append(_format_schedule_rule_fallback(s))
             lines.append("")
 
-        # Footer with hints
         lines.append("─" * 20)
-        lines.append("💡 Управление через настроечный чат:")
-        lines.append("`/schedule del <ID>` — удалить правило")
+        lines.append("💡 `/schedule del <ID>`")
 
         await event.edit('\n'.join(lines), buttons=get_schedule_keyboard())
 
