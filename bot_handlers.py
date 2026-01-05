@@ -969,10 +969,12 @@ def register_bot_handlers(bot, user_client=None):
         _pending_work_time_edit.add(event.sender_id)
 
         await event.edit(
-            f"✏️ **Изменение рабочего времени**\n\n"
-            f"Текущее время: **{work.time_start}—{work.time_end}**\n\n"
-            f"Отправьте новое время в формате:\n"
-            f"`09:00-18:00`",
+            f"✏️ **Настройка рабочего времени**\n\n"
+            f"Текущее время: **{work.time_start}—{work.time_end}**\n"
+            f"Текущий эмодзи: `{work.emoji_id}`\n\n"
+            f"Отправьте:\n"
+            f"• Время в формате `09:00-18:00`\n"
+            f"• Или эмодзи для изменения статуса",
             buttons=[[Button.inline("❌ Отмена", b"schedule_work_edit_cancel")]]
         )
 
@@ -1526,17 +1528,42 @@ def register_bot_handlers(bot, user_client=None):
         if not await _is_owner(event):
             return
 
-        # Check if user is editing work schedule time
+        # Check if user is editing work schedule (time or emoji)
         if event.sender_id in _pending_work_time_edit:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
             text = event.message.text.strip() if event.message.text else ""
+
+            work = Schedule.get_work_schedule()
+            if not work:
+                _pending_work_time_edit.discard(event.sender_id)
+                await event.respond(
+                    "❌ Рабочее расписание не найдено.",
+                    buttons=get_schedule_keyboard()
+                )
+                return
+
+            # Check if user sent emoji
+            if custom_emojis:
+                emoji_id = custom_emojis[0].document_id
+                work.emoji_id = str(emoji_id)
+                work.save()
+                _pending_work_time_edit.discard(event.sender_id)
+                logger.info(f"Work emoji updated to {emoji_id}")
+
+                await event.respond(
+                    f"✅ Эмодзи для работы изменён!",
+                    buttons=get_schedule_keyboard()
+                )
+                return
 
             # Parse time format: "09:00-18:00" or "09:00 - 18:00"
             match = TIME_RANGE_PATTERN.match(text)
 
             if not match:
                 await event.respond(
-                    "❌ Неверный формат времени.\n\n"
-                    "Используйте формат: `09:00-18:00`",
+                    "❌ Неверный формат.\n\n"
+                    "Отправьте время `09:00-18:00` или эмодзи.",
                     buttons=[[Button.inline("❌ Отмена", b"schedule_work_edit_cancel")]]
                 )
                 return
@@ -1548,54 +1575,46 @@ def register_bot_handlers(bot, user_client=None):
             time_start = ':'.join(p.zfill(2) for p in time_start.split(':'))
             time_end = ':'.join(p.zfill(2) for p in time_end.split(':'))
 
-            # Update work schedule
-            work = Schedule.get_work_schedule()
-            if work:
-                work.time_start = time_start
-                work.time_end = time_end
-                work.save()
-                logger.info(f"Work schedule time updated to {time_start}-{time_end}")
+            # Update work schedule time
+            work.time_start = time_start
+            work.time_end = time_end
+            work.save()
+            logger.info(f"Work schedule time updated to {time_start}-{time_end}")
 
-                # Update related schedules to match work time
-                updates = []
+            # Update related schedules to match work time
+            updates = []
 
-                # Friday weekend starts when work ends
-                friday_weekend = Schedule.get_friday_weekend_schedule()
-                if friday_weekend and friday_weekend.time_start != time_end:
-                    friday_weekend.time_start = time_end
-                    friday_weekend.save()
-                    updates.append(f"📅 Выходные в ПТ с **{time_end}**")
-                    logger.info(f"Friday weekend start time updated to {time_end}")
+            # Friday weekend starts when work ends
+            friday_weekend = Schedule.get_friday_weekend_schedule()
+            if friday_weekend and friday_weekend.time_start != time_end:
+                friday_weekend.time_start = time_end
+                friday_weekend.save()
+                updates.append(f"📅 Выходные в ПТ с **{time_end}**")
+                logger.info(f"Friday weekend start time updated to {time_end}")
 
-                # Morning ends when work starts
-                morning = Schedule.get_morning_schedule()
-                if morning and morning.time_end != time_start:
-                    morning.time_end = time_start
-                    morning.save()
-                    updates.append(f"🌅 Утро до **{time_start}**")
-                    logger.info(f"Morning end time updated to {time_start}")
+            # Morning ends when work starts
+            morning = Schedule.get_morning_schedule()
+            if morning and morning.time_end != time_start:
+                morning.time_end = time_start
+                morning.save()
+                updates.append(f"🌅 Утро до **{time_start}**")
+                logger.info(f"Morning end time updated to {time_start}")
 
-                # Evening starts when work ends
-                evening = Schedule.get_evening_schedule()
-                if evening and evening.time_start != time_end:
-                    evening.time_start = time_end
-                    evening.save()
-                    updates.append(f"🌙 Вечер с **{time_end}**")
-                    logger.info(f"Evening start time updated to {time_end}")
+            # Evening starts when work ends
+            evening = Schedule.get_evening_schedule()
+            if evening and evening.time_start != time_end:
+                evening.time_start = time_end
+                evening.save()
+                updates.append(f"🌙 Вечер с **{time_end}**")
+                logger.info(f"Evening start time updated to {time_end}")
 
-                _pending_work_time_edit.discard(event.sender_id)
+            _pending_work_time_edit.discard(event.sender_id)
 
-                msg = f"✅ Рабочее время изменено!\n\nНовое время: **{time_start}—{time_end}**"
-                if updates:
-                    msg += "\n\n" + "\n".join(updates)
+            msg = f"✅ Рабочее время изменено!\n\nНовое время: **{time_start}—{time_end}**"
+            if updates:
+                msg += "\n\n" + "\n".join(updates)
 
-                await event.respond(msg, buttons=get_schedule_keyboard())
-            else:
-                _pending_work_time_edit.discard(event.sender_id)
-                await event.respond(
-                    "❌ Рабочее расписание не найдено.",
-                    buttons=get_schedule_keyboard()
-                )
+            await event.respond(msg, buttons=get_schedule_keyboard())
             return
 
         # Check if user is setting morning emoji
