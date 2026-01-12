@@ -2,7 +2,7 @@ version: '3.8'
 services:
   app:
     container_name: telegram-assistant
-    image: "${DOCKER_IMAGE:-ghcr.io/yerkebulan/telegram-assistant:latest}"
+    image: "${DOCKER_IMAGE:-ghcr.io/yerkenabildin/telegram-assistant:latest}"
     restart: always
     env_file:
       - .env
