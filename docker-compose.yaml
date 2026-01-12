@@ -2,13 +2,13 @@ version: '3.8'
 services:
   app:
     container_name: telegram-assistant
-    image: "cr.yandex/crpm6kkscaeg5uqtfdqt/telegram-assistant:latest"
+    image: "${DOCKER_IMAGE:-ghcr.io/yerkebulan/telegram-assistant:latest}"
     restart: always
     env_file:
       - .env
     environment:
       - SCRIPT_NAME=/telegram-assistant
     volumes:
-      - /home/yerken/storage/telegram-assistant:/app/storage
+      - ${STORAGE_PATH:-./storage}:/app/storage
     ports:
       - "5050:5050"

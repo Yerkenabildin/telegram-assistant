@@ -1,107 +1,109 @@
 # Telegram Auto-Responder Bot
 
-A Telegram bot that automatically responds to incoming private messages based on your emoji status.
+Telegram бот для автоматических ответов на личные сообщения в зависимости от вашего emoji-статуса.
 
-## Features
+## Возможности
 
-- Auto-reply to private messages based on custom emoji status
-- Emoji-based message templates stored in SQLite
-- ASAP urgency keyword detection with notifications
-- Web-based Telegram authentication
-- Docker support
+- Автоответы на личные сообщения на основе emoji-статуса
+- Шаблоны сообщений привязаны к конкретным emoji
+- Уведомления при обнаружении слова "ASAP" в сообщениях
+- Веб-интерфейс для авторизации в Telegram
+- Поддержка Docker
 
-## Setup
+## Быстрый старт
 
-### 1. Clone the repository
+### 1. Скачать файлы
 
 ```bash
-git clone <repository-url>
-cd telegram-assistant
+mkdir telegram-assistant && cd telegram-assistant
+curl -O https://raw.githubusercontent.com/yerkebulan/telegram-assistant/main/docker-compose.yaml
+curl -O https://raw.githubusercontent.com/yerkebulan/telegram-assistant/main/.env.example
 ```
 
-### 2. Configure environment variables
+### 2. Получить API ключи Telegram
 
-Copy the example environment file and fill in your credentials:
+1. Перейдите на [my.telegram.org](https://my.telegram.org)
+2. Войдите в свой аккаунт
+3. Перейдите в "API development tools"
+4. Создайте приложение и скопируйте `API_ID` и `API_HASH`
+
+### 3. Создать файл .env
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and set the following variables:
+Откройте `.env` и заполните:
 
-- `API_ID`: Get from [my.telegram.org](https://my.telegram.org)
-- `API_HASH`: Get from [my.telegram.org](https://my.telegram.org)
-- `PERSONAL_TG_LOGIN`: Your personal Telegram username for notifications
-- `WORK_TG_LOGIN`: Your work Telegram username allowed to set auto-replies
-- `AVAILABLE_EMOJI_ID` (optional): Emoji status ID that disables auto-reply
-- `SECRET_KEY` (optional): Secret key for session encryption (auto-generated if not set)
+```env
+API_ID=12345678
+API_HASH=your_api_hash_here
+PERSONAL_TG_LOGIN=your_username
+WORK_TG_LOGIN=your_work_username
+```
 
-### 3. Run with Docker
+### 4. Запустить
 
 ```bash
-# Build the image
-docker build -t telegram-assistant:0.0.1 .
-
-# Run with docker-compose
 docker-compose up -d
-
-# View logs
-docker logs -f tg-helper
 ```
 
-### 4. Run locally
+### 5. Авторизоваться
 
-```bash
-# Install dependencies
-pip install -r requirements.txt
+1. Откройте в браузере: http://localhost:5050
+2. Введите номер телефона
+3. Введите код из Telegram
+4. При наличии 2FA — введите пароль
 
-# Run the application
-python main.py
-```
+Готово!
 
-## Authentication
+## Использование
 
-1. Navigate to `http://localhost:8000` in your browser
-2. Enter your phone number
-3. Enter the verification code sent to your Telegram
-4. If you have 2FA enabled, enter your password
+### Настройка автоответа
 
-## Usage
-
-### Setting up auto-replies
-
-Send a message to your bot account from your work account:
+Отправьте команду со своего рабочего аккаунта (`WORK_TG_LOGIN`) в ответ на сообщение-шаблон:
 
 ```
 /set_for [emoji]
 ```
 
-Reply to the message you want to use as a template.
+Где `[emoji]` — это кастомный emoji-статус, при котором будет отправляться этот ответ.
 
-### Auto-reply behavior
+### Как работает автоответ
 
-- Bot checks your current emoji status
-- If a template is configured for that emoji, it will auto-reply to incoming private messages
-- Rate limit: Only sends once per 30 minutes to each user (since last outgoing message)
-- If your status is set to the "available" emoji, auto-reply is disabled
+1. Бот проверяет ваш текущий emoji-статус
+2. Если для этого emoji настроен шаблон — отправляет автоответ
+3. Ограничение: не чаще 1 раза в 30 минут одному пользователю
+4. Если статус = `AVAILABLE_EMOJI_ID` — автоответы отключены
 
-### ASAP notifications
+### ASAP-уведомления
 
-When someone sends a message containing "ASAP" (case-insensitive), you'll receive a notification on your personal account (unless you're marked as available).
+Когда кто-то пишет сообщение со словом "ASAP", вы получите уведомление на личный аккаунт (`PERSONAL_TG_LOGIN`).
 
-## Project Structure
+## Переменные окружения
 
+| Переменная | Обязательная | Описание |
+|------------|--------------|----------|
+| `API_ID` | Да | API ID из my.telegram.org |
+| `API_HASH` | Да | API Hash из my.telegram.org |
+| `PERSONAL_TG_LOGIN` | Да | Username для ASAP-уведомлений |
+| `WORK_TG_LOGIN` | Да | Username с правами настройки автоответов |
+| `AVAILABLE_EMOJI_ID` | Нет | ID emoji-статуса "доступен" (автоответы отключены) |
+| `SECRET_KEY` | Нет | Ключ шифрования сессии (генерируется автоматически) |
+| `DOCKER_IMAGE` | Нет | Кастомный Docker образ |
+| `STORAGE_PATH` | Нет | Путь к папке хранения данных |
+
+## Для разработчиков
+
+```bash
+git clone https://github.com/yerkebulan/telegram-assistant.git
+cd telegram-assistant
+cp .env.example .env
+# заполнить .env
+pip install -r requirements.txt
+python main.py
 ```
-.
-├── main.py              # Main application entry point
-├── models.py            # Database models
-├── templates/           # HTML templates for authentication
-├── storage/            # Persistent data (session, database)
-├── Dockerfile          # Docker container configuration
-├── docker-compose.yaml # Docker Compose configuration
-└── requirements.txt    # Python dependencies
-```
 
-## License
+## Лицензия
 
 MIT
