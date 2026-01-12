@@ -27,7 +27,14 @@ curl -O https://raw.githubusercontent.com/yerkebulan/telegram-assistant/main/.en
 3. Перейдите в "API development tools"
 4. Создайте приложение и скопируйте `API_ID` и `API_HASH`
 
-### 3. Создать файл .env
+### 3. Создать Telegram бота
+
+1. Откройте [@BotFather](https://t.me/BotFather) в Telegram
+2. Отправьте `/newbot`
+3. Введите имя и username для бота
+4. Скопируйте полученный токен
+
+### 4. Создать файл .env
 
 ```bash
 cp .env.example .env
@@ -38,22 +45,21 @@ cp .env.example .env
 ```env
 API_ID=12345678
 API_HASH=your_api_hash_here
+BOT_TOKEN=123456:ABC-DEF...
 PERSONAL_TG_LOGIN=your_username
-WORK_TG_LOGIN=your_work_username
 ```
 
-### 4. Запустить
+### 5. Запустить
 
 ```bash
 docker-compose up -d
 ```
 
-### 5. Авторизоваться
+### 6. Авторизоваться
 
-1. Откройте в браузере: http://localhost:5050
-2. Введите номер телефона
-3. Введите код из Telegram
-4. При наличии 2FA — введите пароль
+1. Откройте вашего бота в Telegram
+2. Отправьте `/start`
+3. Следуйте инструкциям для авторизации
 
 Готово!
 
@@ -86,10 +92,10 @@ docker-compose up -d
 |------------|--------------|----------|
 | `API_ID` | Да | API ID из my.telegram.org |
 | `API_HASH` | Да | API Hash из my.telegram.org |
+| `BOT_TOKEN` | Да | Токен бота от @BotFather |
 | `PERSONAL_TG_LOGIN` | Да | Username для ASAP-уведомлений |
-| `WORK_TG_LOGIN` | Да | Username с правами настройки автоответов |
 | `AVAILABLE_EMOJI_ID` | Нет | ID emoji-статуса "доступен" (автоответы отключены) |
-| `SECRET_KEY` | Нет | Ключ шифрования сессии (генерируется автоматически) |
+| `ALLOWED_USERNAME` | Нет | Разрешить авторизацию только этому username |
 | `DOCKER_IMAGE` | Нет | Кастомный Docker образ |
 | `STORAGE_PATH` | Нет | Путь к папке хранения данных |
 
