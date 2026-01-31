@@ -125,7 +125,7 @@ docker logs -f telegram-assistant
 | `MENTION_TIME_LIMIT_MINUTES` | NO | `30` | Maximum age (in minutes) of messages to include in context |
 | `YANDEX_GPT_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
 | `YANDEX_GPT_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
-| `YANDEX_GPT_MODEL` | NO | `yandexgpt-lite` | Model name (`yandexgpt-lite` for speed, `yandexgpt` for quality) |
+| `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
 
 ## Event Handlers
 
@@ -355,7 +355,7 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
    ```
    YANDEX_GPT_API_KEY=your-api-key-or-iam-token
    YANDEX_GPT_FOLDER_ID=your-folder-id
-   YANDEX_GPT_MODEL=yandexgpt-lite  # or yandexgpt for better quality
+   YANDEX_GPT_MODEL=yandexgpt  # or yandexgpt-lite for faster/cheaper responses
    ```
 
 ## Testing

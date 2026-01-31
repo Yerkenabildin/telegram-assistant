@@ -94,9 +94,9 @@ class Config:
         default_factory=lambda: os.environ.get('YANDEX_GPT_FOLDER_ID') or None
     )
 
-    # Yandex GPT model (default: yandexgpt-lite for speed, or yandexgpt for quality)
+    # Yandex GPT model (default: yandexgpt for quality, or yandexgpt-lite for speed)
     yandex_gpt_model: str = field(
-        default_factory=lambda: os.environ.get('YANDEX_GPT_MODEL', 'yandexgpt-lite')
+        default_factory=lambda: os.environ.get('YANDEX_GPT_MODEL', 'yandexgpt')
     )
 
     def validate(self) -> list[str]:
