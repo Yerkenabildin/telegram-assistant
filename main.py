@@ -238,7 +238,12 @@ async def productivity_summary_scheduler():
                     service = get_productivity_service()
                     gpt_service = get_yandex_gpt_service()
 
-                    daily = await service.collect_daily_messages(client)
+                    # Get extra chat IDs for muted chats user wants to include
+                    extra_chat_ids = Settings.get_productivity_extra_chats()
+
+                    daily = await service.collect_daily_messages(
+                        client, extra_chat_ids=extra_chat_ids
+                    )
                     summary_text = await service.generate_daily_summary(daily, gpt_service)
 
                     # Send via bot if available, otherwise via user client

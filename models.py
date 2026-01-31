@@ -315,6 +315,43 @@ class Settings(Model):
         else:
             Settings.set('productivity_summary_time', time_str)
 
+    @staticmethod
+    def get_productivity_extra_chats() -> List[int]:
+        """Get list of extra chat IDs to always include in productivity summary.
+
+        Returns:
+            List of chat IDs
+        """
+        value = Settings.get('productivity_extra_chats')
+        if not value:
+            return []
+        try:
+            return [int(x) for x in value.split(',') if x.strip()]
+        except ValueError:
+            return []
+
+    @staticmethod
+    def add_productivity_extra_chat(chat_id: int) -> None:
+        """Add a chat to the extra chats list for productivity summary."""
+        chats = Settings.get_productivity_extra_chats()
+        if chat_id not in chats:
+            chats.append(chat_id)
+            Settings.set('productivity_extra_chats', ','.join(str(c) for c in chats))
+
+    @staticmethod
+    def remove_productivity_extra_chat(chat_id: int) -> bool:
+        """Remove a chat from the extra chats list.
+
+        Returns:
+            True if removed, False if not found
+        """
+        chats = Settings.get_productivity_extra_chats()
+        if chat_id in chats:
+            chats.remove(chat_id)
+            Settings.set('productivity_extra_chats', ','.join(str(c) for c in chats))
+            return True
+        return False
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""

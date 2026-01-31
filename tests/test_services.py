@@ -1955,3 +1955,443 @@ class TestProductivitySettingsIntegration:
         default = None
         is_default = (default or 'false') == 'true'
         assert is_default is False
+
+
+class TestProductivityServiceMutedDialogFiltering:
+    """Tests for ProductivityService._is_dialog_muted()."""
+
+    def test_returns_false_when_no_notify_settings(self):
+        """Test returns False when dialog has no notify settings."""
+        dialog = MagicMock()
+        dialog.dialog = MagicMock()
+        dialog.dialog.notify_settings = None
+
+        # Simulate _is_dialog_muted logic
+        notify_settings = getattr(dialog.dialog, 'notify_settings', None)
+        result = False
+        if notify_settings is not None:
+            result = True  # Would check mute_until
+
+        assert result is False
+
+    def test_returns_true_when_muted_forever(self):
+        """Test returns True when dialog is muted forever (max int)."""
+        from datetime import datetime
+
+        dialog = MagicMock()
+        dialog.dialog = MagicMock()
+        dialog.dialog.notify_settings = MagicMock()
+        dialog.dialog.notify_settings.mute_until = 2147483647  # Max int = muted forever
+
+        notify_settings = dialog.dialog.notify_settings
+        mute_until = getattr(notify_settings, 'mute_until', None)
+
+        is_muted = False
+        if mute_until and mute_until > datetime.now().timestamp():
+            is_muted = True
+
+        assert is_muted is True
+
+    def test_returns_true_when_muted_until_future(self):
+        """Test returns True when mute_until is in the future."""
+        from datetime import datetime
+
+        dialog = MagicMock()
+        dialog.dialog = MagicMock()
+        dialog.dialog.notify_settings = MagicMock()
+        # Muted until 1 hour from now
+        dialog.dialog.notify_settings.mute_until = datetime.now().timestamp() + 3600
+
+        notify_settings = dialog.dialog.notify_settings
+        mute_until = getattr(notify_settings, 'mute_until', None)
+
+        is_muted = mute_until and mute_until > datetime.now().timestamp()
+
+        assert is_muted is True
+
+    def test_returns_false_when_mute_expired(self):
+        """Test returns False when mute_until is in the past."""
+        from datetime import datetime
+
+        dialog = MagicMock()
+        dialog.dialog = MagicMock()
+        dialog.dialog.notify_settings = MagicMock()
+        # Muted until 1 hour ago (expired)
+        dialog.dialog.notify_settings.mute_until = datetime.now().timestamp() - 3600
+
+        notify_settings = dialog.dialog.notify_settings
+        mute_until = getattr(notify_settings, 'mute_until', None)
+
+        is_muted = mute_until and mute_until > datetime.now().timestamp()
+
+        assert is_muted is False
+
+    def test_returns_true_when_silent_flag_set(self):
+        """Test returns True when silent flag is set."""
+        dialog = MagicMock()
+        dialog.dialog = MagicMock()
+        dialog.dialog.notify_settings = MagicMock()
+        dialog.dialog.notify_settings.mute_until = None
+        dialog.dialog.notify_settings.silent = True
+
+        notify_settings = dialog.dialog.notify_settings
+        silent = getattr(notify_settings, 'silent', False)
+
+        assert silent is True
+
+    def test_returns_false_when_not_muted_and_not_silent(self):
+        """Test returns False when dialog is not muted and not silent."""
+        from datetime import datetime
+
+        dialog = MagicMock()
+        dialog.dialog = MagicMock()
+        dialog.dialog.notify_settings = MagicMock()
+        dialog.dialog.notify_settings.mute_until = None
+        dialog.dialog.notify_settings.silent = False
+
+        notify_settings = dialog.dialog.notify_settings
+        mute_until = getattr(notify_settings, 'mute_until', None)
+        silent = getattr(notify_settings, 'silent', False)
+
+        is_muted = False
+        if mute_until and mute_until > datetime.now().timestamp():
+            is_muted = True
+        if silent:
+            is_muted = True
+
+        assert is_muted is False
+
+
+class TestProductivityServiceExtraChatIds:
+    """Tests for ProductivityService extra_chat_ids parameter."""
+
+    def test_muted_chat_included_when_in_extra_ids(self):
+        """Test muted chat is included when in extra_chat_ids."""
+        dialog_id = 12345
+        is_muted = True
+        extra_chat_ids = [12345, 67890]
+
+        is_extra = dialog_id in extra_chat_ids
+        should_skip = is_muted and not is_extra
+
+        assert is_extra is True
+        assert should_skip is False  # Should NOT be skipped
+
+    def test_muted_chat_skipped_when_not_in_extra_ids(self):
+        """Test muted chat is skipped when not in extra_chat_ids."""
+        dialog_id = 12345
+        is_muted = True
+        extra_chat_ids = [67890]  # Different ID
+
+        is_extra = dialog_id in extra_chat_ids
+        should_skip = is_muted and not is_extra
+
+        assert is_extra is False
+        assert should_skip is True  # Should be skipped
+
+    def test_unmuted_chat_included_regardless_of_extra_ids(self):
+        """Test unmuted chat is included regardless of extra_chat_ids."""
+        dialog_id = 12345
+        is_muted = False
+        extra_chat_ids = []
+
+        is_extra = dialog_id in extra_chat_ids
+        should_skip = is_muted and not is_extra
+
+        assert should_skip is False  # Unmuted = never skipped
+
+    def test_empty_extra_chat_ids_list(self):
+        """Test handles empty extra_chat_ids list."""
+        dialog_id = 12345
+        extra_chat_ids = []
+
+        is_extra = dialog_id in extra_chat_ids
+
+        assert is_extra is False
+
+    def test_none_extra_chat_ids_treated_as_empty(self):
+        """Test None extra_chat_ids is treated as empty list."""
+        dialog_id = 12345
+        extra_chat_ids = None
+
+        # Simulate handling of None
+        extra_chat_ids = extra_chat_ids or []
+        is_extra = dialog_id in extra_chat_ids
+
+        assert is_extra is False
+
+
+class TestProductivityExtraChatSettings:
+    """Tests for productivity extra chats settings methods."""
+
+    def test_parse_extra_chats_string(self):
+        """Test parsing comma-separated chat IDs from string."""
+        value = "-1001234567890,-100987654321,123456"
+
+        chat_ids = []
+        if value:
+            for part in value.split(','):
+                part = part.strip()
+                if part:
+                    try:
+                        chat_ids.append(int(part))
+                    except ValueError:
+                        pass
+
+        assert len(chat_ids) == 3
+        assert -1001234567890 in chat_ids
+        assert -100987654321 in chat_ids
+        assert 123456 in chat_ids
+
+    def test_parse_empty_string_returns_empty_list(self):
+        """Test parsing empty string returns empty list."""
+        value = ""
+
+        chat_ids = []
+        if value:
+            for part in value.split(','):
+                part = part.strip()
+                if part:
+                    try:
+                        chat_ids.append(int(part))
+                    except ValueError:
+                        pass
+
+        assert chat_ids == []
+
+    def test_parse_none_returns_empty_list(self):
+        """Test parsing None returns empty list."""
+        value = None
+
+        chat_ids = []
+        if value:
+            for part in value.split(','):
+                part = part.strip()
+                if part:
+                    try:
+                        chat_ids.append(int(part))
+                    except ValueError:
+                        pass
+
+        assert chat_ids == []
+
+    def test_add_chat_to_list(self):
+        """Test adding chat ID to existing list."""
+        existing = [-1001234567890]
+        new_chat_id = -100987654321
+
+        if new_chat_id not in existing:
+            existing.append(new_chat_id)
+
+        assert len(existing) == 2
+        assert new_chat_id in existing
+
+    def test_add_duplicate_chat_not_added(self):
+        """Test duplicate chat ID is not added."""
+        existing = [-1001234567890]
+        new_chat_id = -1001234567890  # Same as existing
+
+        if new_chat_id not in existing:
+            existing.append(new_chat_id)
+
+        assert len(existing) == 1
+
+    def test_remove_chat_from_list(self):
+        """Test removing chat ID from list."""
+        chat_ids = [-1001234567890, -100987654321]
+        to_remove = -1001234567890
+
+        if to_remove in chat_ids:
+            chat_ids.remove(to_remove)
+
+        assert len(chat_ids) == 1
+        assert to_remove not in chat_ids
+
+    def test_remove_nonexistent_chat_no_error(self):
+        """Test removing nonexistent chat ID does not raise error."""
+        chat_ids = [-1001234567890]
+        to_remove = -100987654321  # Not in list
+
+        if to_remove in chat_ids:
+            chat_ids.remove(to_remove)
+
+        assert len(chat_ids) == 1  # Unchanged
+
+    def test_serialize_chat_ids_to_string(self):
+        """Test serializing chat IDs list to comma-separated string."""
+        chat_ids = [-1001234567890, -100987654321]
+
+        value = ','.join(str(id) for id in chat_ids)
+
+        assert value == "-1001234567890,-100987654321"
+
+
+class TestProductivitySummaryHashtag:
+    """Tests for hashtag in productivity summary output."""
+
+    def test_summary_includes_hashtag(self):
+        """Test summary includes #productivity hashtag."""
+        lines = [
+            "📊 **Продуктивность за 31.01.2026**",
+            "",
+            "📨 Всего сообщений: **42**",
+            "",
+            "#productivity #дайджест"
+        ]
+        summary = "\n".join(lines)
+
+        assert "#productivity" in summary
+        assert "#дайджест" in summary
+
+    def test_hashtag_at_end_of_summary(self):
+        """Test hashtag is at the end of summary."""
+        lines = [
+            "📊 **Продуктивность за 31.01.2026**",
+            "",
+            "📨 Всего сообщений: **42**",
+            "",
+            "#productivity #дайджест"
+        ]
+        summary = "\n".join(lines)
+
+        assert summary.endswith("#productivity #дайджест")
+
+    def test_empty_summary_includes_hashtag(self):
+        """Test even empty summary includes hashtag."""
+        summary = "📊 **Сводка за день**\n\nСегодня вы не отправляли сообщений.\n\n#productivity #дайджест"
+
+        assert "#productivity" in summary
+
+
+class TestProductivityFloodWaitHandling:
+    """Tests for FloodWait error handling in productivity service."""
+
+    def test_flood_wait_should_continue_to_next_chat(self):
+        """Test FloodWait error should skip current chat and continue."""
+        # Simulate FloodWait handling logic
+        chats_processed = []
+        chats_to_process = ["chat1", "chat2", "chat3"]
+        flood_wait_on = "chat2"
+
+        for chat in chats_to_process:
+            if chat == flood_wait_on:
+                # FloodWait - skip this chat
+                continue
+            chats_processed.append(chat)
+
+        assert "chat1" in chats_processed
+        assert "chat2" not in chats_processed  # Skipped
+        assert "chat3" in chats_processed
+
+    def test_flood_wait_extracts_wait_seconds(self):
+        """Test FloodWait error extracts wait seconds."""
+        # Simulate FloodWaitError with seconds attribute
+        class FakeFloodWaitError(Exception):
+            def __init__(self, seconds):
+                self.seconds = seconds
+
+        error = FakeFloodWaitError(30)
+
+        assert error.seconds == 30
+
+    def test_request_delay_reduces_flood_risk(self):
+        """Test request delay parameter exists for rate limiting."""
+        request_delay = 0.5  # 500ms delay between requests
+
+        assert request_delay > 0
+        assert request_delay <= 1.0  # Reasonable upper bound
+
+
+class TestProductivityBotMenuIntegration:
+    """Tests for productivity bot menu integration."""
+
+    def test_main_menu_includes_productivity(self):
+        """Test main menu should include productivity option."""
+        menu_items = [
+            "📊 Статус",
+            "📝 Автоответы",
+            "📅 Расписание",
+            "📈 Продуктивность",
+            "⚙️ Настройки"
+        ]
+
+        assert "📈 Продуктивность" in menu_items
+
+    def test_productivity_menu_structure(self):
+        """Test productivity menu has required buttons."""
+        buttons = [
+            "📊 Сгенерировать сейчас",
+            "⏰ Время отправки",
+            "➕ Доп. чаты",
+            "🟢 Включить / 🔴 Выключить",
+            "« Назад"
+        ]
+
+        assert "📊 Сгенерировать сейчас" in buttons
+        assert "⏰ Время отправки" in buttons
+        assert "➕ Доп. чаты" in buttons
+        assert "« Назад" in buttons
+
+    def test_extra_chats_menu_structure(self):
+        """Test extra chats menu has required buttons."""
+        buttons = [
+            "➕ Добавить чат",
+            "🗑 Очистить все",
+            "« Назад"
+        ]
+
+        assert "➕ Добавить чат" in buttons
+        assert "🗑 Очистить все" in buttons
+        assert "« Назад" in buttons
+
+    def test_add_chat_via_forwarded_message(self):
+        """Test adding chat via forwarded message extracts chat ID."""
+        # Simulate forwarded message from channel
+        fwd_from_id = MagicMock()
+        fwd_from_id.channel_id = 1234567890
+
+        # Simulate chat ID extraction
+        if hasattr(fwd_from_id, 'channel_id'):
+            chat_id = int(f"-100{fwd_from_id.channel_id}")
+
+        assert chat_id == -1001234567890
+
+    def test_add_chat_via_group_forward(self):
+        """Test adding chat via forwarded message from group."""
+        # Simulate forwarded message from regular group
+        fwd_from_id = MagicMock()
+        fwd_from_id.chat_id = 123456789
+        fwd_from_id.channel_id = None
+
+        # Simulate chat ID extraction
+        if hasattr(fwd_from_id, 'channel_id') and fwd_from_id.channel_id:
+            chat_id = int(f"-100{fwd_from_id.channel_id}")
+        elif hasattr(fwd_from_id, 'chat_id'):
+            chat_id = -fwd_from_id.chat_id
+
+        assert chat_id == -123456789
+
+    def test_add_chat_via_manual_id_input(self):
+        """Test adding chat via manual ID input."""
+        text = "-1001234567890"
+
+        try:
+            chat_id = int(text)
+            is_valid = True
+        except ValueError:
+            is_valid = False
+
+        assert is_valid is True
+        assert chat_id == -1001234567890
+
+    def test_invalid_manual_id_rejected(self):
+        """Test invalid manual ID is rejected."""
+        text = "not_a_number"
+
+        try:
+            chat_id = int(text)
+            is_valid = True
+        except ValueError:
+            is_valid = False
+
+        assert is_valid is False

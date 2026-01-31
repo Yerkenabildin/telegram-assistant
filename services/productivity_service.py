@@ -96,23 +96,61 @@ class ProductivityService:
 
         return day_start, day_end
 
+    def _is_dialog_muted(self, dialog) -> bool:
+        """
+        Check if a dialog is muted.
+
+        Args:
+            dialog: Telethon dialog object
+
+        Returns:
+            True if dialog is muted, False otherwise
+        """
+        try:
+            # dialog.dialog contains PeerNotifySettings
+            notify_settings = getattr(dialog.dialog, 'notify_settings', None)
+            if notify_settings is None:
+                return False
+
+            # Check mute_until - if set to a future timestamp or max int, it's muted
+            mute_until = getattr(notify_settings, 'mute_until', None)
+            if mute_until:
+                # mute_until is a timestamp; if it's in the future, dialog is muted
+                # Max value (2147483647) means muted forever
+                if mute_until > datetime.now().timestamp():
+                    return True
+
+            # Also check silent flag
+            silent = getattr(notify_settings, 'silent', False)
+            if silent:
+                return True
+
+            return False
+        except Exception:
+            return False
+
     async def collect_daily_messages(
         self,
         client,
-        date: Optional[datetime] = None
+        date: Optional[datetime] = None,
+        extra_chat_ids: Optional[List[int]] = None
     ) -> DailySummary:
         """
         Collect all outgoing messages for a given day.
 
         Iterates through dialogs and fetches outgoing messages.
+        By default, only unmuted chats are included, but extra_chat_ids
+        allows including specific muted chats.
 
         Args:
             client: Telethon client
             date: Date to collect messages for (defaults to today)
+            extra_chat_ids: List of chat IDs to always include (even if muted)
 
         Returns:
             DailySummary with collected messages grouped by chat
         """
+        extra_chat_ids = extra_chat_ids or []
         day_start, day_end = self._get_today_range(date)
 
         logger.info(f"Collecting messages for {day_start.date()}")
@@ -128,6 +166,7 @@ class ProductivityService:
 
         dialog_count = 0
         skipped_inactive = 0
+        skipped_muted = 0
 
         # Iterate through all dialogs
         # Dialogs are sorted by date (most recent first)
@@ -150,6 +189,12 @@ class ProductivityService:
                         logger.info(f"Skipped {skipped_inactive} inactive dialogs, stopping search")
                         break
                     continue
+
+            # Skip muted dialogs unless they're in extra_chat_ids
+            is_extra = dialog.id in extra_chat_ids
+            if not is_extra and self._is_dialog_muted(dialog):
+                skipped_muted += 1
+                continue
 
             dialog_count += 1
 
@@ -270,7 +315,7 @@ class ProductivityService:
         logger.info(
             f"Collected {summary.total_messages} messages from "
             f"{summary.total_chats} chats (scanned {dialog_count} active dialogs, "
-            f"skipped {skipped_inactive} inactive)"
+            f"skipped {skipped_inactive} inactive, {skipped_muted} muted)"
         )
 
         return summary
@@ -369,7 +414,7 @@ class ProductivityService:
             Formatted summary text
         """
         if daily.total_messages == 0:
-            return "📊 **Сводка за день**\n\nСегодня вы не отправляли сообщений."
+            return "📊 **Сводка за день**\n\nСегодня вы не отправляли сообщений.\n\n#productivity #дайджест"
 
         lines = [
             f"📊 **Продуктивность за {daily.date.strftime('%d.%m.%Y')}**",
@@ -424,6 +469,10 @@ class ProductivityService:
         remaining = daily.total_chats - len(chat_summaries)
         if remaining > 0:
             lines.append(f"\n...и ещё {remaining} чатов")
+
+        # Add hashtag for easy filtering
+        lines.append("")
+        lines.append("#productivity #дайджест")
 
         return "\n".join(lines)
 
