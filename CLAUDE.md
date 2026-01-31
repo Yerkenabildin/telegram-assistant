@@ -140,7 +140,7 @@ Main Telethon event handlers in `main.py`:
 | `setup_response_current_status` | `/set` | Outgoing | Settings chat | Bind current status to reply (line 293-339) |
 | `asap_handler` | `.*ASAP.*` | Incoming | Private | Urgent notification |
 | `group_mention_handler` | All | Incoming | Groups | Mention notifications when offline |
-| `new_messages` | All | Incoming | Private | Auto-reply logic |
+| `new_messages` | All | Incoming | Private | Auto-reply or online notification via bot |
 
 ## API Routes
 
@@ -283,12 +283,51 @@ Settings menu includes "Выйти из аккаунта" to logout and re-authe
 Incoming private message:
 ├─ Check: User has emoji_status set?
 │  └─ No → Exit
+├─ Check: Is user "online" (work emoji or available emoji)?
+│  └─ Yes → Send notification via bot (see below)
 ├─ Check: Template exists for current emoji_status in Reply table?
 │  └─ No → Exit
 ├─ Check: Rate limit (15+ minutes since last message to this sender)?
 │  └─ No → Exit
 └─ Send templated reply to sender
 ```
+
+## Online Message Notifications
+
+When user is "online" (has work emoji from schedule or AVAILABLE_EMOJI_ID), the bot sends notifications about incoming private messages instead of auto-replies.
+
+### Flow
+```
+Incoming private message when user is online:
+├─ Check: Is user "online" (emoji status = work/available)?
+│  └─ No → Fall through to auto-reply logic
+├─ Check: Is bot configured?
+│  └─ No → Exit
+└─ Send notification via bot to owner:
+   ├─ Sender info (@username, name)
+   ├─ Message text (truncated to 500 chars)
+   └─ Auto-reply template (if exists for current status)
+```
+
+### Notification Format
+```
+📨 Новое личное сообщение
+
+👤 От: @username (Name)
+
+💬 Сообщение:
+  «Message text here...»
+
+📝 Шаблон автоответа:
+  «Template text if exists...»
+```
+
+### Configuration
+- `AVAILABLE_EMOJI_ID` - Emoji that means user is "online"
+- Work emoji from schedule - Also means user is "online"
+- `BOT_TOKEN` - Required for sending notifications
+
+Note: Notifications are sent silently (no sound) to avoid spam.
 
 ## Group Mention Notifications
 

@@ -76,7 +76,7 @@ bot = create_bot()
 
 # Register routes and handlers
 register_routes(app, client)
-register_handlers(client)
+register_handlers(client, bot)
 
 # Register bot handlers if bot is configured
 if bot:

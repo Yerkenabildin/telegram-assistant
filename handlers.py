@@ -4,7 +4,9 @@ Telegram event handlers for auto-reply bot.
 Handles incoming messages for auto-reply and ASAP notifications.
 All configuration is done via the bot interface (bot_handlers.py).
 """
-from telethon import events
+from typing import Optional
+
+from telethon import events, TelegramClient
 from telethon.errors import ReactionInvalidError
 from telethon.tl import types
 from telethon.tl.functions.messages import SendReactionRequest
@@ -12,7 +14,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply
+from models import Reply, Schedule
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 from services.mention_service import MentionService
@@ -103,12 +105,85 @@ def _get_display_name(user) -> str:
     return 'Unknown'
 
 
-def register_handlers(client):
+def _is_user_online(emoji_status_id: Optional[int]) -> bool:
+    """
+    Check if user is considered "online" based on emoji status.
+
+    User is online if:
+    - Emoji status matches work emoji from schedule
+    - Or emoji status matches AVAILABLE_EMOJI_ID from config
+
+    Args:
+        emoji_status_id: Current user's emoji status ID
+
+    Returns:
+        True if user is online
+    """
+    if emoji_status_id is None:
+        return False
+
+    # Check work emoji from schedule
+    work_emoji_id = Schedule.get_work_emoji_id()
+    if work_emoji_id is not None and emoji_status_id == work_emoji_id:
+        return True
+
+    # Check available emoji from config
+    if config.available_emoji_id and emoji_status_id == config.available_emoji_id:
+        return True
+
+    return False
+
+
+def _format_online_notification(
+    sender_name: str,
+    sender_username: Optional[str],
+    message_text: str,
+    reply_text: Optional[str] = None
+) -> str:
+    """
+    Format notification about incoming message when user is online.
+
+    Args:
+        sender_name: Sender's display name
+        sender_username: Sender's username (without @)
+        message_text: The incoming message text
+        reply_text: Auto-reply template that would be sent if offline
+
+    Returns:
+        Formatted notification message
+    """
+    # Sender info
+    if sender_username:
+        sender_info = f"@{sender_username} ({sender_name})"
+    else:
+        sender_info = sender_name
+
+    lines = [
+        "📨 Новое личное сообщение",
+        "",
+        f"👤 От: {sender_info}",
+        "",
+        "💬 Сообщение:",
+        f"  «{message_text[:500]}»" if message_text else "  (без текста)",
+    ]
+
+    if reply_text:
+        lines.extend([
+            "",
+            "📝 Шаблон автоответа:",
+            f"  «{reply_text[:200]}...»" if len(reply_text) > 200 else f"  «{reply_text}»",
+        ])
+
+    return "\n".join(lines)
+
+
+def register_handlers(client, bot: Optional[TelegramClient] = None):
     """
     Register all Telegram event handlers on the client.
 
     Args:
         client: Telethon client instance
+        bot: Optional Telethon bot client for sending notifications when user is online
     """
 
     @client.on(events.NewMessage(outgoing=True))
@@ -238,7 +313,7 @@ def register_handlers(client):
 
     @client.on(events.NewMessage(incoming=True))
     async def new_messages(event):
-        """Handle incoming messages for auto-reply."""
+        """Handle incoming messages for auto-reply or online notification."""
         if not event.is_private:
             return
 
@@ -253,6 +328,7 @@ def register_handlers(client):
 
         sender_username = getattr(sender, 'username', None)
         sender_id = getattr(sender, 'id', 0)
+        sender_name = _get_display_name(sender)
 
         # Use username or ID for message lookup
         user_identifier = sender_username or sender_id
@@ -267,6 +343,32 @@ def register_handlers(client):
         except Exception as e:
             logger.warning(f"Could not get messages for rate limiting: {e}")
             last_outgoing = None
+
+        # Check if user is online - send notification via bot instead of auto-reply
+        if _is_user_online(emoji_status_id) and bot:
+            # Send notification via bot when user is online
+            try:
+                # Get reply template text for notification (if exists)
+                reply_text = None
+                if reply and reply.message:
+                    reply_text = reply.message.text or reply.message.message
+
+                notification = _format_online_notification(
+                    sender_name=sender_name,
+                    sender_username=sender_username,
+                    message_text=event.message.text or '',
+                    reply_text=reply_text
+                )
+
+                await bot.send_message(
+                    me.id,
+                    notification,
+                    silent=True  # Don't make sound for every message
+                )
+                logger.info(f"Online notification sent via bot for message from {user_identifier}")
+            except Exception as e:
+                logger.warning(f"Failed to send online notification via bot: {e}")
+            return
 
         if not _autoreply_service.should_send_reply(
             emoji_status_id=emoji_status_id,
