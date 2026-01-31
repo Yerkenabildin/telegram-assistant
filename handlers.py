@@ -21,6 +21,7 @@ from models import Reply
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 from services.mention_service import MentionService
+from services.context_extraction_service import get_context_extraction_service
 
 # Services initialized once
 _autoreply_service = AutoReplyService(cooldown_minutes=config.autoreply_cooldown_minutes)
@@ -416,21 +417,44 @@ def register_handlers(client, bot=None):
 
         logger.info(f"Mention detected in '{chat_title}' from {sender_name} (online={is_online})")
 
-        # Fetch recent messages for context
+        # Use context extraction service for smart context fetching
+        context_service = get_context_extraction_service()
+
+        # Extract context using anchor-based logic
         try:
-            messages = await client.get_messages(
-                event.chat_id,
-                limit=_mention_service.message_limit
+            extracted_context = await context_service.extract_context(
+                client=client,
+                chat_id=event.chat_id,
+                mention_message=event.message,
+                message_limit=200  # Fetch more messages for anchor-based filtering
             )
-            # Filter by time
-            messages = _mention_service.filter_messages_by_time(messages)
+            logger.info(
+                f"Extracted context: {extracted_context.total_messages} messages, "
+                f"span={extracted_context.time_span_minutes:.1f}min, "
+                f"has_reply_chain={extracted_context.has_reply_chain}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to fetch messages for context: {e}")
+            logger.warning(f"Context extraction failed, using fallback: {e}")
+            extracted_context = None
+
+        # Fallback: fetch recent messages manually
+        if extracted_context is None:
+            try:
+                messages = await client.get_messages(
+                    event.chat_id,
+                    limit=_mention_service.message_limit
+                )
+                messages = _mention_service.filter_messages_by_time(messages)
+            except Exception as e:
+                logger.warning(f"Failed to fetch messages for context: {e}")
+                messages = [event.message]
+        else:
+            # Convert extracted context to message list for legacy compatibility
             messages = [event.message]
 
-        # Fetch reply chain if this is a reply
+        # Fetch reply chain for fallback path (if not using extracted context)
         reply_chain = []
-        if event.message.reply_to_msg_id:
+        if extracted_context is None and event.message.reply_to_msg_id:
             try:
                 reply_chain = await _get_reply_chain(client, event.chat_id, event.message, max_depth=5)
                 if reply_chain:
@@ -440,7 +464,9 @@ def register_handlers(client, bot=None):
 
         # Generate summary (try AI first, fallback to keywords)
         summary, ai_urgency = await _mention_service.generate_summary_with_ai(
-            messages, event.message, chat_title, reply_chain=reply_chain
+            messages, event.message, chat_title,
+            reply_chain=reply_chain,
+            extracted_context=extracted_context
         )
 
         # Check urgency: VIP sender always urgent, then AI, then keywords
@@ -452,7 +478,17 @@ def register_handlers(client, bot=None):
             is_urgent = ai_urgency
             logger.debug(f"Urgency from AI: {is_urgent}")
         else:
-            is_urgent = _mention_service.is_urgent(messages)
+            # Use extracted context messages for keyword-based urgency check
+            if extracted_context and extracted_context.messages:
+                # Create mock message objects for keyword check
+                class MockMessage:
+                    def __init__(self, text):
+                        self.text = text
+
+                context_msgs = [MockMessage(m.text) for m in extracted_context.messages]
+                is_urgent = _mention_service.is_urgent(context_msgs)
+            else:
+                is_urgent = _mention_service.is_urgent(messages)
             logger.debug(f"Urgency from keywords: {is_urgent}")
 
         # Format notification with online/offline indicator

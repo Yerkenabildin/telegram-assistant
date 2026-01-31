@@ -295,7 +295,8 @@ class MentionService:
         messages: List[Any],
         mention_message: Any,
         chat_title: str,
-        reply_chain: Optional[List[Any]] = None
+        reply_chain: Optional[List[Any]] = None,
+        extracted_context: Optional[Any] = None
     ) -> Tuple[str, Optional[bool]]:
         """
         Generate summary using Yandex GPT if available, otherwise fallback to keywords.
@@ -305,6 +306,7 @@ class MentionService:
             mention_message: The message that contains the mention
             chat_title: Title of the chat for context
             reply_chain: Optional list of messages in reply chain (oldest first)
+            extracted_context: Optional ExtractedContext from context_extraction_service
 
         Returns:
             Tuple of (summary text, is_urgent from AI or None to use keyword detection)
@@ -317,10 +319,45 @@ class MentionService:
             logger.debug("Yandex GPT not configured, using keyword-based summary")
             return self.generate_summary(messages, mention_message, reply_chain=reply_chain), None
 
-        # Prepare messages for GPT
         mention_text = getattr(mention_message, 'text', '') or ''
 
-        # Get context messages (text only)
+        # Use extracted context if available (new flow)
+        if extracted_context is not None:
+            from services.context_extraction_service import ContextExtractionService
+
+            # Check if context needs chunking
+            ctx_service = ContextExtractionService()
+            needs_chunking = ctx_service.needs_chunked_summarization(extracted_context)
+
+            # Prepare context messages for GPT
+            context_messages = [
+                {
+                    'sender': msg.sender_name,
+                    'text': msg.text
+                }
+                for msg in extracted_context.messages
+                if msg.text.strip() and not msg.is_mention
+            ]
+
+            try:
+                summary, is_urgent = await gpt_service.summarize_context(
+                    context_messages=context_messages,
+                    mention_message=mention_text,
+                    chat_title=chat_title,
+                    needs_chunking=needs_chunking
+                )
+
+                if summary:
+                    logger.info(f"Generated summary using Yandex GPT (chunked={needs_chunking})")
+                    return summary, is_urgent
+
+            except Exception as e:
+                logger.warning(f"Yandex GPT failed, falling back to keywords: {e}")
+
+            # Fallback to keyword-based summary
+            return self.generate_summary(messages, mention_message, reply_chain=reply_chain), None
+
+        # Legacy flow: prepare messages manually
         context_texts = []
 
         # Add reply chain first (if present)

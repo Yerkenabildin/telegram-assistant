@@ -2,9 +2,11 @@
 Yandex GPT service for AI-powered text analysis.
 
 Provides summarization and urgency detection for mention notifications.
+Supports chunked summarization for large contexts.
 """
+import asyncio
 import aiohttp
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import json
 
 from logging_config import get_logger
@@ -13,6 +15,9 @@ logger = get_logger('yandex_gpt')
 
 # Yandex GPT API endpoint
 YANDEX_GPT_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
+# Chunked summarization settings
+MAX_CONCURRENT_CHUNKS = 3  # Max parallel API calls for chunk summarization
 
 
 class YandexGPTService:
@@ -193,6 +198,164 @@ class YandexGPTService:
         formatted = "\n".join(parts) if parts else response[:200]
 
         return formatted, is_urgent
+
+    async def summarize_chunk(
+        self,
+        messages: List[str],
+        chunk_index: int,
+        total_chunks: int
+    ) -> Optional[str]:
+        """
+        Summarize a single chunk of messages.
+
+        Args:
+            messages: List of messages in the chunk
+            chunk_index: Index of this chunk (0-based)
+            total_chunks: Total number of chunks
+
+        Returns:
+            Summary text or None on error
+        """
+        context_text = "\n".join(f"- {msg}" for msg in messages)
+
+        prompt = f"""Это часть {chunk_index + 1} из {total_chunks} обсуждения в групповом чате.
+
+Сообщения:
+{context_text}
+
+Кратко суммаризуй этот фрагмент обсуждения (2-3 предложения). Сохрани ключевые темы и участников."""
+
+        try:
+            response = await self._call_api(prompt)
+            if response:
+                return response.strip()
+        except Exception as e:
+            logger.error(f"Chunk {chunk_index} summarization failed: {e}")
+
+        return None
+
+    async def summarize_with_chunks(
+        self,
+        chunks: List[List[str]],
+        mention_message: str,
+        chat_title: str
+    ) -> Tuple[str, bool]:
+        """
+        Summarize large context by processing chunks and creating final summary.
+
+        Process:
+        1. Summarize each chunk in parallel (with limit)
+        2. Combine chunk summaries
+        3. Create final summary with urgency detection
+
+        Args:
+            chunks: List of message chunks (each chunk is a list of message strings)
+            mention_message: The message that contains the mention
+            chat_title: Name of the chat
+
+        Returns:
+            Tuple of (final summary, is_urgent)
+        """
+        total_chunks = len(chunks)
+        logger.info(f"Starting chunked summarization: {total_chunks} chunks")
+
+        # Summarize chunks with limited parallelism
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_CHUNKS)
+
+        async def summarize_with_limit(chunk: List[str], idx: int) -> Tuple[int, Optional[str]]:
+            async with semaphore:
+                summary = await self.summarize_chunk(chunk, idx, total_chunks)
+                return idx, summary
+
+        # Process all chunks
+        tasks = [
+            summarize_with_limit(chunk, i)
+            for i, chunk in enumerate(chunks)
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # Collect successful summaries in order
+        chunk_summaries = []
+        for idx, summary in sorted(results, key=lambda x: x[0]):
+            if summary:
+                chunk_summaries.append(f"[Часть {idx + 1}] {summary}")
+
+        if not chunk_summaries:
+            logger.warning("All chunk summaries failed")
+            return None, None
+
+        # Create final summary from chunk summaries
+        combined_summaries = "\n".join(chunk_summaries)
+
+        final_prompt = f"""Проанализируй суммаризированное обсуждение из чата "{chat_title}":
+
+{combined_summaries}
+
+Сообщение с упоминанием пользователя:
+{mention_message}
+
+Ответь строго в формате:
+ПРИЧИНА: [одно предложение - зачем призвали пользователя]
+СРОЧНОСТЬ: [да/нет - требуется ли немедленная реакция]
+КРАТКОЕ РЕЗЮМЕ: [2-3 предложения о сути всего обсуждения]"""
+
+        try:
+            response = await self._call_api(final_prompt)
+            if response:
+                return self._parse_response(response)
+        except Exception as e:
+            logger.error(f"Final summary generation failed: {e}")
+
+        # Fallback: return combined chunk summaries
+        fallback_summary = f"📌 Контекст обсуждения:\n{combined_summaries[:500]}"
+        return fallback_summary, False
+
+    async def summarize_context(
+        self,
+        context_messages: List[dict],
+        mention_message: str,
+        chat_title: str,
+        needs_chunking: bool = False,
+        chunk_size: int = 15
+    ) -> Tuple[str, bool]:
+        """
+        Summarize context with automatic chunking if needed.
+
+        Args:
+            context_messages: List of dicts with 'sender' and 'text' keys
+            mention_message: The mention message text
+            chat_title: Chat title
+            needs_chunking: Whether to force chunking
+            chunk_size: Messages per chunk
+
+        Returns:
+            Tuple of (summary, is_urgent)
+        """
+        # Format messages
+        formatted_messages = [
+            f"[{msg.get('sender', 'Unknown')}] {msg.get('text', '')}"
+            for msg in context_messages
+            if msg.get('text', '').strip()
+        ]
+
+        if not formatted_messages:
+            return None, None
+
+        # Decide if we need chunking
+        if needs_chunking or len(formatted_messages) > chunk_size * 2:
+            # Split into chunks
+            chunks = [
+                formatted_messages[i:i + chunk_size]
+                for i in range(0, len(formatted_messages), chunk_size)
+            ]
+            return await self.summarize_with_chunks(chunks, mention_message, chat_title)
+
+        # Use standard single-call summarization
+        return await self.summarize_mention(
+            messages=formatted_messages,
+            mention_message=mention_message,
+            chat_title=chat_title
+        )
 
 
 # Singleton instance (created when config is available)

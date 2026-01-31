@@ -55,10 +55,13 @@ The application runs up to three async services concurrently via `asyncio.gather
 | File | Lines | Purpose |
 |------|-------|---------|
 | `main.py` | ~300 | Entry point, orchestrates all services |
-| `handlers.py` | ~150 | User client event handlers (commands, auto-reply) |
+| `handlers.py` | ~600 | User client event handlers (commands, auto-reply, mentions) |
 | `bot_handlers.py` | ~900 | Bot client handlers with inline keyboards and auth |
 | `routes.py` | ~150 | API routes (health, meeting) |
 | `models.py` | ~500 | SQLite ORM models (Reply, Settings, Schedule) |
+| `services/context_extraction_service.py` | ~400 | Anchor-based context extraction for mentions |
+| `services/mention_service.py` | ~450 | Mention notification logic and formatting |
+| `services/yandex_gpt_service.py` | ~400 | AI summarization with chunking support |
 | `./storage/` | - | Persistent data directory (session file, database) |
 
 ### Module Dependencies
@@ -307,8 +310,11 @@ Incoming group message with @mention:
 ├─ Check: Does message mention the current user?
 │  └─ No → Exit
 ├─ Determine online status (has work/available emoji?)
-├─ Fetch recent messages (up to MENTION_MESSAGE_LIMIT, within MENTION_TIME_LIMIT_MINUTES)
-├─ Generate context summary
+├─ Extract context using anchor-based logic:
+│  ├─ Find anchor (root of reply chain)
+│  ├─ If anchor exists: fetch 30min before anchor + all until mention
+│  └─ If no reply chain: fetch last 1 hour of messages
+├─ Generate context summary (with chunking for large contexts)
 ├─ Check urgency:
 │  ├─ VIP sender (VIP_USERNAMES) → Always urgent
 │  ├─ AI detection (if Yandex GPT configured)
@@ -322,6 +328,28 @@ Incoming group message with @mention:
       ├─ If read → skip notification
       └─ If not read → send via bot
 ```
+
+### Context Extraction (Anchor-Based)
+
+The bot uses smart context extraction based on reply chains:
+
+1. **With reply chain**: Find the anchor message (root of the thread)
+   - Extract 30 min of messages before the anchor
+   - Include all messages from anchor to the mention
+   - This captures the full discussion context
+
+2. **Without reply chain**: Fallback to time-based extraction
+   - Fetch the last 1 hour of messages
+   - Filter by time relevance
+
+3. **Chunked summarization**: For large contexts
+   - Split messages into chunks (15 messages each)
+   - Summarize each chunk with AI
+   - Combine chunk summaries into final summary
+
+**Key files:**
+- `services/context_extraction_service.py` - Anchor-based context extraction
+- `services/yandex_gpt_service.py` - AI summarization with chunking support
 
 ### Notification Format
 ```
@@ -382,10 +410,12 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
 ```
 tests/
 ├── __init__.py
-├── conftest.py          # Shared fixtures
-├── test_models.py       # Reply and Settings model tests
-├── test_routes.py       # Quart web route tests
-└── test_handlers.py     # Telethon event handler tests
+├── conftest.py               # Shared fixtures
+├── test_models.py            # Reply and Settings model tests
+├── test_routes.py            # Quart web route tests
+├── test_handlers.py          # Telethon event handler tests
+├── test_services.py          # Service layer tests
+└── test_context_extraction.py # Context extraction service tests
 ```
 
 ### Running Tests
