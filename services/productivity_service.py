@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from zoneinfo import ZoneInfo
 
+from telethon.errors import FloodWaitError
+
 from logging_config import get_logger
 
 logger = get_logger('productivity')
@@ -55,7 +57,8 @@ class ProductivityService:
         timezone: str = "Europe/Moscow",
         max_dialogs: int = 100,
         max_messages_per_chat: int = 200,
-        summary_chunk_size: int = 20
+        summary_chunk_size: int = 20,
+        request_delay: float = 0.5  # Delay between API requests to avoid FloodWait
     ):
         """
         Initialize the productivity service.
@@ -65,11 +68,13 @@ class ProductivityService:
             max_dialogs: Maximum number of dialogs to scan
             max_messages_per_chat: Maximum messages to fetch per chat
             summary_chunk_size: Messages per chunk for AI summarization
+            request_delay: Delay in seconds between API requests (rate limiting)
         """
         self.timezone = ZoneInfo(timezone)
         self.max_dialogs = max_dialogs
         self.max_messages_per_chat = max_messages_per_chat
         self.summary_chunk_size = summary_chunk_size
+        self.request_delay = request_delay
 
     def _get_today_range(self, date: Optional[datetime] = None) -> tuple[datetime, datetime]:
         """
@@ -170,6 +175,9 @@ class ProductivityService:
             last_msg_time = None
 
             try:
+                # Rate limiting: small delay between dialog processing
+                await asyncio.sleep(self.request_delay)
+
                 # First, quickly check if we have any outgoing messages today
                 # by fetching a small batch with from_user filter
                 found_my_messages = False
@@ -222,6 +230,13 @@ class ProductivityService:
                     import re
                     mentions = re.findall(r'@(\w+)', text)
                     participants.update(mentions)
+
+            except FloodWaitError as e:
+                # Telegram rate limit hit - wait and continue
+                wait_time = e.seconds
+                logger.warning(f"FloodWait: waiting {wait_time}s before continuing...")
+                await asyncio.sleep(wait_time + 1)  # Wait + 1s safety margin
+                continue  # Skip this chat, move to next
 
             except Exception as e:
                 logger.warning(f"Failed to fetch messages from '{chat_title}': {e}")
