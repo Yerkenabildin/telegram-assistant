@@ -812,14 +812,13 @@ class VipList(Model):
         """Add a VIP user by username."""
         username = username.lower().lstrip('@')
         # Check if already exists
-        existing = VipList().selectOne(
-            SQL().WHERE('item_type', '=', 'user').AND('item_id', '=', username)
-        )
-        if existing:
-            if display_name:
-                existing.display_name = display_name
-                existing.save()
-            return existing
+        users = VipList().select(SQL().WHERE('item_type', '=', 'user')) or []
+        for u in users:
+            if u.item_id == username:
+                if display_name:
+                    u.display_name = display_name
+                    u.save()
+                return u
 
         entry = VipList()
         entry.item_type = 'user'
@@ -833,14 +832,13 @@ class VipList(Model):
         """Add a VIP chat by ID."""
         chat_id_str = str(chat_id)
         # Check if already exists
-        existing = VipList().selectOne(
-            SQL().WHERE('item_type', '=', 'chat').AND('item_id', '=', chat_id_str)
-        )
-        if existing:
-            if display_name:
-                existing.display_name = display_name
-                existing.save()
-            return existing
+        chats = VipList().select(SQL().WHERE('item_type', '=', 'chat')) or []
+        for c in chats:
+            if c.item_id == chat_id_str:
+                if display_name:
+                    c.display_name = display_name
+                    c.save()
+                return c
 
         entry = VipList()
         entry.item_type = 'chat'
