@@ -33,7 +33,7 @@ class TestContextExtractionServiceInit:
         assert service.fallback_context_minutes == DEFAULT_FALLBACK_CONTEXT_MINUTES
         assert service.max_reply_chain_depth == 50
         assert service.chunk_size == 20
-        assert service.max_tokens_per_chunk == 8000
+        assert service.max_tokens_per_chunk == 20000
 
     def test_custom_values(self):
         """Test custom initialization values."""
