@@ -236,7 +236,8 @@ def register_handlers(client, bot=None):
             sender_name=sender_name,
             sender_username=sender_username,
             summary=summary,
-            is_urgent=is_urgent
+            is_urgent=is_urgent,
+            message_id=event.message.id
         )
 
         # Add online indicator to notification header

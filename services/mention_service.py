@@ -345,7 +345,8 @@ class MentionService:
         sender_name: str,
         sender_username: Optional[str],
         summary: str,
-        is_urgent: bool
+        is_urgent: bool,
+        message_id: Optional[int] = None
     ) -> str:
         """
         Format the notification message.
@@ -357,6 +358,7 @@ class MentionService:
             sender_username: Username of the sender (may be None)
             summary: Generated summary of context
             is_urgent: Whether this is an urgent mention
+            message_id: ID of the mention message (for deep link)
 
         Returns:
             Formatted notification message
@@ -383,11 +385,11 @@ class MentionService:
             summary,
         ]
 
-        # Add chat link if possible
-        # Note: Private groups don't have public links
-        if chat_id:
+        # Add link to the specific message
+        if chat_id and message_id:
+            link = self.get_chat_link(chat_id, message_id)
             lines.append("")
-            lines.append(f"🔗 Открыть чат: tg://resolve?domain=c/{str(chat_id).replace('-100', '')}")
+            lines.append(f"🔗 Открыть сообщение: {link}")
 
         return "\n".join(lines)
 
