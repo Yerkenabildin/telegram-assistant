@@ -75,7 +75,8 @@ class MentionService:
         self,
         message_limit: int = 50,
         time_limit_minutes: int = 30,
-        available_emoji_id: Optional[int] = None
+        available_emoji_id: Optional[int] = None,
+        vip_usernames: Optional[List[str]] = None
     ):
         """
         Initialize the mention service.
@@ -84,10 +85,12 @@ class MentionService:
             message_limit: Maximum number of messages to fetch for context
             time_limit_minutes: Maximum age of messages to include in context
             available_emoji_id: Emoji ID that indicates user is "online/available"
+            vip_usernames: List of usernames whose mentions are always urgent
         """
         self.message_limit = message_limit
         self.time_limit = timedelta(minutes=time_limit_minutes)
         self.available_emoji_id = available_emoji_id
+        self.vip_usernames = [u.lower() for u in (vip_usernames or [])]
 
     def should_notify(self, emoji_status_id: Optional[int]) -> bool:
         """
@@ -133,6 +136,23 @@ class MentionService:
                 logger.debug(f"Urgent keyword found in message: {text[:50]}...")
                 return True
         return False
+
+    def is_vip_sender(self, sender_username: Optional[str]) -> bool:
+        """
+        Check if sender is a VIP whose mentions are always urgent.
+
+        Args:
+            sender_username: Username of the sender (without @)
+
+        Returns:
+            True if sender is in VIP list
+        """
+        if not sender_username or not self.vip_usernames:
+            return False
+        is_vip = sender_username.lower() in self.vip_usernames
+        if is_vip:
+            logger.debug(f"VIP sender detected: @{sender_username}")
+        return is_vip
 
     def filter_messages_by_time(
         self,

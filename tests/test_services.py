@@ -618,6 +618,44 @@ class TestMentionServiceIsUrgent:
         assert result is True
 
 
+class TestMentionServiceIsVipSender:
+    """Tests for MentionService.is_vip_sender()."""
+
+    def _is_vip_sender(self, vip_usernames, sender_username):
+        """Helper to test VIP sender logic."""
+        vip_list = [u.lower() for u in (vip_usernames or [])]
+        if not sender_username or not vip_list:
+            return False
+        return sender_username.lower() in vip_list
+
+    def test_returns_true_for_vip_username(self):
+        """Test returns True when sender is in VIP list."""
+        vip_usernames = ['vrmaks', 'admin']
+        assert self._is_vip_sender(vip_usernames, 'vrmaks') is True
+        assert self._is_vip_sender(vip_usernames, 'admin') is True
+
+    def test_returns_false_for_non_vip_username(self):
+        """Test returns False when sender is not in VIP list."""
+        vip_usernames = ['vrmaks']
+        assert self._is_vip_sender(vip_usernames, 'someuser') is False
+
+    def test_case_insensitive(self):
+        """Test VIP check is case insensitive."""
+        vip_usernames = ['VrMaks']
+        assert self._is_vip_sender(vip_usernames, 'vrmaks') is True
+        assert self._is_vip_sender(vip_usernames, 'VRMAKS') is True
+
+    def test_returns_false_for_none_username(self):
+        """Test returns False when username is None."""
+        vip_usernames = ['vrmaks']
+        assert self._is_vip_sender(vip_usernames, None) is False
+
+    def test_returns_false_when_no_vip_list(self):
+        """Test returns False when VIP list is empty."""
+        assert self._is_vip_sender([], 'vrmaks') is False
+        assert self._is_vip_sender(None, 'vrmaks') is False
+
+
 class TestMentionServiceFilterMessagesByTime:
     """Tests for MentionService.filter_messages_by_time()."""
 

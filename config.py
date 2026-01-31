@@ -99,6 +99,15 @@ class Config:
         default_factory=lambda: os.environ.get('YANDEX_GPT_MODEL', 'yandexgpt')
     )
 
+    # VIP usernames whose mentions are always treated as urgent (comma-separated)
+    vip_usernames: list[str] = field(
+        default_factory=lambda: [
+            u.strip().lower().lstrip('@')
+            for u in os.environ.get('VIP_USERNAMES', 'vrmaks').split(',')
+            if u.strip()
+        ]
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []

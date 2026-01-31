@@ -27,8 +27,12 @@ _notification_service = NotificationService(
 _mention_service = MentionService(
     message_limit=config.mention_message_limit,
     time_limit_minutes=config.mention_time_limit_minutes,
-    available_emoji_id=config.available_emoji_id
+    available_emoji_id=config.available_emoji_id,
+    vip_usernames=config.vip_usernames
 )
+
+# Bot client for sending online notifications (set via register_handlers)
+_bot_client = None
 
 
 def _is_user_mentioned(message, user_id: int, username: str = None) -> bool:
@@ -103,13 +107,16 @@ def _get_display_name(user) -> str:
     return 'Unknown'
 
 
-def register_handlers(client):
+def register_handlers(client, bot=None):
     """
     Register all Telegram event handlers on the client.
 
     Args:
         client: Telethon client instance
+        bot: Telethon bot client for sending online mention notifications
     """
+    global _bot_client
+    _bot_client = bot
 
     @client.on(events.NewMessage(outgoing=True))
     async def debug_outgoing(event):
@@ -160,7 +167,7 @@ def register_handlers(client):
 
     @client.on(events.NewMessage(incoming=True))
     async def group_mention_handler(event):
-        """Handle mentions in group chats when user is offline."""
+        """Handle mentions in group chats - notify both when online and offline."""
         # Only group chats (not private)
         if event.is_private:
             return
@@ -170,11 +177,9 @@ def register_handlers(client):
         if not _is_user_mentioned(event.message, me.id, me.username):
             return
 
-        # Check if user is "offline" (not available emoji)
+        # Check if user is "online" (has available/work emoji)
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
-        if not _mention_service.should_notify(emoji_status_id):
-            logger.debug(f"User is online, not sending mention notification")
-            return
+        is_online = not _mention_service.should_notify(emoji_status_id)
 
         # Get chat info
         chat = await event.get_chat()
@@ -188,7 +193,7 @@ def register_handlers(client):
         sender_name = _get_display_name(sender)
         sender_username = getattr(sender, 'username', None)
 
-        logger.info(f"Mention detected in '{chat_title}' from {sender_name}")
+        logger.info(f"Mention detected in '{chat_title}' from {sender_name} (online={is_online})")
 
         # Fetch recent messages for context
         try:
@@ -207,15 +212,24 @@ def register_handlers(client):
             messages, event.message, chat_title
         )
 
-        # Check urgency: use AI detection if available, otherwise keyword-based
-        if ai_urgency is not None:
+        # Check urgency: VIP sender always urgent, then AI, then keywords
+        is_vip = _mention_service.is_vip_sender(sender_username)
+        if is_vip:
+            is_urgent = True
+            logger.debug(f"Urgency from VIP sender: {sender_username}")
+        elif ai_urgency is not None:
             is_urgent = ai_urgency
             logger.debug(f"Urgency from AI: {is_urgent}")
         else:
             is_urgent = _mention_service.is_urgent(messages)
             logger.debug(f"Urgency from keywords: {is_urgent}")
 
-        # Format notification
+        # Format notification with online/offline indicator
+        if is_online:
+            header_suffix = " (вы онлайн)"
+        else:
+            header_suffix = ""
+
         notification = _mention_service.format_notification(
             chat_title=chat_title,
             chat_id=event.chat_id,
@@ -225,14 +239,43 @@ def register_handlers(client):
             is_urgent=is_urgent
         )
 
-        # Send notification (silent if not urgent)
+        # Add online indicator to notification header
+        if is_online and not is_urgent:
+            notification = notification.replace("📢 Упоминание в группе", "📢 Упоминание в группе (вы онлайн)")
+        elif is_online and is_urgent:
+            notification = notification.replace("🚨 Срочное упоминание в группе!", "🚨 Срочное упоминание (вы онлайн)!")
+
+        # Send notification
+        # When online: send via bot to personal chat (if bot available)
+        # When offline: send via user client
         try:
-            await client.send_message(
-                config.personal_tg_login,
-                notification,
-                silent=not is_urgent  # Silent notification if not urgent
-            )
-            logger.info(f"Mention notification sent (urgent={is_urgent})")
+            if is_online and _bot_client:
+                # Get owner ID from bot_handlers
+                from bot_handlers import get_owner_id
+                owner_id = get_owner_id()
+                if owner_id:
+                    await _bot_client.send_message(
+                        owner_id,
+                        notification,
+                        silent=not is_urgent
+                    )
+                    logger.info(f"Mention notification sent via bot (online, urgent={is_urgent})")
+                else:
+                    # Fallback to user client if owner_id not set
+                    await client.send_message(
+                        config.personal_tg_login,
+                        notification,
+                        silent=not is_urgent
+                    )
+                    logger.info(f"Mention notification sent via user client (owner_id not set, urgent={is_urgent})")
+            else:
+                # Offline or no bot: send via user client
+                await client.send_message(
+                    config.personal_tg_login,
+                    notification,
+                    silent=not is_urgent
+                )
+                logger.info(f"Mention notification sent via user client (offline, urgent={is_urgent})")
         except Exception as e:
             logger.error(f"Failed to send mention notification: {e}")
 
