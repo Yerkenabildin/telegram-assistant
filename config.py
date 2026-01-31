@@ -108,6 +108,12 @@ class Config:
         ]
     )
 
+    # Delay before sending online mention notification (in minutes)
+    # If message is read within this time, notification won't be sent
+    online_mention_delay_minutes: int = field(
+        default_factory=lambda: int(os.environ.get('ONLINE_MENTION_DELAY_MINUTES', '10'))
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []

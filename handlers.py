@@ -4,10 +4,15 @@ Telegram event handlers for auto-reply bot.
 Handles incoming messages for auto-reply and ASAP notifications.
 All configuration is done via the bot interface (bot_handlers.py).
 """
+import asyncio
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Dict, Optional
+
 from telethon import events
 from telethon.errors import ReactionInvalidError
 from telethon.tl import types
-from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.functions.messages import SendReactionRequest, GetPeerDialogsRequest
 from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
@@ -33,6 +38,24 @@ _mention_service = MentionService(
 
 # Bot client for sending online notifications (set via register_handlers)
 _bot_client = None
+_user_client = None
+
+
+@dataclass
+class PendingMention:
+    """Represents a pending mention notification waiting to be sent."""
+    chat_id: int
+    message_id: int
+    notification: str
+    is_urgent: bool
+    scheduled_time: datetime
+    chat_title: str
+    sender_name: str
+
+
+# Storage for pending mentions (key: "chat_id:message_id")
+_pending_mentions: Dict[str, PendingMention] = {}
+_pending_checker_started = False
 
 
 def _is_user_mentioned(message, user_id: int, username: str = None) -> bool:
@@ -107,6 +130,152 @@ def _get_display_name(user) -> str:
     return 'Unknown'
 
 
+async def _is_message_read(client, chat_id: int, message_id: int) -> bool:
+    """
+    Check if a message in a chat has been read.
+
+    Uses GetPeerDialogsRequest to get read_inbox_max_id for the chat.
+
+    Args:
+        client: Telethon client
+        chat_id: Chat ID
+        message_id: Message ID to check
+
+    Returns:
+        True if message has been read, False otherwise
+    """
+    try:
+        peer = await client.get_input_entity(chat_id)
+        result = await client(GetPeerDialogsRequest(peers=[peer]))
+
+        if result.dialogs:
+            dialog = result.dialogs[0]
+            read_inbox_max_id = dialog.read_inbox_max_id
+            logger.debug(f"Chat {chat_id}: read_inbox_max_id={read_inbox_max_id}, message_id={message_id}")
+            return message_id <= read_inbox_max_id
+
+        return False
+    except Exception as e:
+        logger.warning(f"Failed to check if message {message_id} in chat {chat_id} was read: {e}")
+        return False
+
+
+async def _process_pending_mentions():
+    """
+    Background task to process pending mention notifications.
+
+    Runs every 30 seconds, checks each pending mention:
+    - If scheduled time has passed and message not read -> send notification
+    - If message was read -> remove from pending
+    """
+    global _pending_checker_started
+
+    if _pending_checker_started:
+        return
+
+    _pending_checker_started = True
+    logger.info("Starting pending mentions checker...")
+
+    while True:
+        try:
+            await asyncio.sleep(30)  # Check every 30 seconds
+
+            if not _pending_mentions:
+                continue
+
+            now = datetime.now()
+            to_remove = []
+
+            for key, mention in list(_pending_mentions.items()):
+                # Check if it's time to process this mention
+                if now < mention.scheduled_time:
+                    continue
+
+                # Check if message was read
+                if _user_client:
+                    was_read = await _is_message_read(
+                        _user_client,
+                        mention.chat_id,
+                        mention.message_id
+                    )
+
+                    if was_read:
+                        logger.info(
+                            f"Mention in '{mention.chat_title}' from {mention.sender_name} "
+                            f"was read, skipping notification"
+                        )
+                        to_remove.append(key)
+                        continue
+
+                # Message not read, send notification via bot
+                if _bot_client:
+                    try:
+                        from bot_handlers import get_owner_id
+                        owner_id = get_owner_id()
+                        if owner_id:
+                            await _bot_client.send_message(
+                                owner_id,
+                                mention.notification,
+                                silent=not mention.is_urgent
+                            )
+                            logger.info(
+                                f"Delayed mention notification sent for '{mention.chat_title}' "
+                                f"(urgent={mention.is_urgent})"
+                            )
+                    except Exception as e:
+                        logger.error(f"Failed to send delayed notification: {e}")
+
+                to_remove.append(key)
+
+            # Remove processed mentions
+            for key in to_remove:
+                _pending_mentions.pop(key, None)
+
+        except asyncio.CancelledError:
+            logger.info("Pending mentions checker stopped")
+            break
+        except Exception as e:
+            logger.error(f"Error in pending mentions checker: {e}")
+
+
+def _schedule_pending_mention(
+    chat_id: int,
+    message_id: int,
+    notification: str,
+    is_urgent: bool,
+    chat_title: str,
+    sender_name: str
+):
+    """
+    Schedule a mention notification to be sent after delay.
+
+    Args:
+        chat_id: Chat where mention occurred
+        message_id: Message ID with mention
+        notification: Formatted notification text
+        is_urgent: Whether this is urgent
+        chat_title: Title of the chat
+        sender_name: Name of person who mentioned
+    """
+    key = f"{chat_id}:{message_id}"
+    delay_minutes = config.online_mention_delay_minutes
+
+    _pending_mentions[key] = PendingMention(
+        chat_id=chat_id,
+        message_id=message_id,
+        notification=notification,
+        is_urgent=is_urgent,
+        scheduled_time=datetime.now() + timedelta(minutes=delay_minutes),
+        chat_title=chat_title,
+        sender_name=sender_name
+    )
+
+    logger.info(
+        f"Scheduled mention notification for '{chat_title}' from {sender_name} "
+        f"in {delay_minutes} minutes"
+    )
+
+
 def register_handlers(client, bot=None):
     """
     Register all Telegram event handlers on the client.
@@ -115,8 +284,12 @@ def register_handlers(client, bot=None):
         client: Telethon client instance
         bot: Telethon bot client for sending online mention notifications
     """
-    global _bot_client
+    global _bot_client, _user_client
     _bot_client = bot
+    _user_client = client
+
+    # Start background task for pending mentions
+    asyncio.get_event_loop().create_task(_process_pending_mentions())
 
     @client.on(events.NewMessage(outgoing=True))
     async def debug_outgoing(event):
@@ -247,30 +420,34 @@ def register_handlers(client, bot=None):
             notification = notification.replace("🚨 Срочное упоминание в группе!", "🚨 Срочное упоминание (вы онлайн)!")
 
         # Send notification
-        # When online: send via bot to personal chat (if bot available)
-        # When offline: send via user client
+        # - Offline: send immediately via user client
+        # - Online + VIP urgent: send immediately via bot
+        # - Online + not VIP: schedule with delay (check if read before sending)
         try:
             if is_online and _bot_client:
-                # Get owner ID from bot_handlers
-                from bot_handlers import get_owner_id
-                owner_id = get_owner_id()
-                if owner_id:
-                    await _bot_client.send_message(
-                        owner_id,
-                        notification,
-                        silent=not is_urgent
-                    )
-                    logger.info(f"Mention notification sent via bot (online, urgent={is_urgent})")
+                if is_vip:
+                    # VIP mentions are always sent immediately
+                    from bot_handlers import get_owner_id
+                    owner_id = get_owner_id()
+                    if owner_id:
+                        await _bot_client.send_message(
+                            owner_id,
+                            notification,
+                            silent=False  # VIP is always loud
+                        )
+                        logger.info(f"VIP mention notification sent immediately via bot")
                 else:
-                    # Fallback to user client if owner_id not set
-                    await client.send_message(
-                        config.personal_tg_login,
-                        notification,
-                        silent=not is_urgent
+                    # Non-VIP online mentions: schedule with delay
+                    _schedule_pending_mention(
+                        chat_id=event.chat_id,
+                        message_id=event.message.id,
+                        notification=notification,
+                        is_urgent=is_urgent,
+                        chat_title=chat_title,
+                        sender_name=sender_name
                     )
-                    logger.info(f"Mention notification sent via user client (owner_id not set, urgent={is_urgent})")
             else:
-                # Offline or no bot: send via user client
+                # Offline or no bot: send immediately via user client
                 await client.send_message(
                     config.personal_tg_login,
                     notification,

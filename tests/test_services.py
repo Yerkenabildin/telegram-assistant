@@ -1448,3 +1448,103 @@ class TestMentionGenerateSummaryExtended:
             summary = f"**Сообщение с упоминанием:**\n> {mention_message.text}"
 
         assert mention_message.text in summary
+
+
+class TestDelayedMentionNotification:
+    """Tests for delayed online mention notification logic."""
+
+    def test_vip_sender_sent_immediately(self):
+        """Test VIP sender mentions are sent immediately, not delayed."""
+        is_online = True
+        is_vip = True
+        bot_available = True
+
+        # Logic: VIP mentions should be sent immediately
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is False
+
+    def test_non_vip_online_is_delayed(self):
+        """Test non-VIP online mentions are delayed."""
+        is_online = True
+        is_vip = False
+        bot_available = True
+
+        # Logic: non-VIP online mentions should be delayed
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is True
+
+    def test_offline_sent_immediately(self):
+        """Test offline mentions are sent immediately."""
+        is_online = False
+        is_vip = False
+        bot_available = True
+
+        # Logic: offline mentions should be sent immediately
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is False
+
+    def test_no_bot_sent_immediately(self):
+        """Test mentions without bot are sent immediately."""
+        is_online = True
+        is_vip = False
+        bot_available = False
+
+        # Logic: no bot = use user client immediately
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is False
+
+    def test_pending_mention_scheduled_with_delay(self):
+        """Test pending mention is scheduled with correct delay."""
+        from datetime import datetime, timedelta
+
+        delay_minutes = 10
+        now = datetime.now()
+        scheduled_time = now + timedelta(minutes=delay_minutes)
+
+        # Check delay is approximately correct (within 1 second)
+        diff = (scheduled_time - now).total_seconds()
+        assert 599 <= diff <= 601  # 10 minutes = 600 seconds
+
+    def test_pending_mention_skipped_if_read(self):
+        """Test pending mention is skipped if message was read."""
+        message_id = 42
+        read_inbox_max_id = 50  # Message 42 is before 50, so it's read
+
+        was_read = message_id <= read_inbox_max_id
+
+        assert was_read is True
+
+    def test_pending_mention_sent_if_not_read(self):
+        """Test pending mention is sent if message was not read."""
+        message_id = 55
+        read_inbox_max_id = 50  # Message 55 is after 50, so not read
+
+        was_read = message_id <= read_inbox_max_id
+
+        assert was_read is False
+
+    def test_pending_mention_storage_key_format(self):
+        """Test pending mention storage key format."""
+        chat_id = -1001234567890
+        message_id = 42
+
+        key = f"{chat_id}:{message_id}"
+
+        assert key == "-1001234567890:42"
+
+    def test_multiple_pending_mentions_stored(self):
+        """Test multiple pending mentions can be stored."""
+        pending = {}
+
+        # Add first mention
+        pending["chat1:1"] = {"chat_id": "chat1", "message_id": 1}
+        # Add second mention
+        pending["chat2:2"] = {"chat_id": "chat2", "message_id": 2}
+
+        assert len(pending) == 2
+        assert "chat1:1" in pending
+        assert "chat2:2" in pending

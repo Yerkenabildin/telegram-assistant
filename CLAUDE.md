@@ -127,6 +127,7 @@ docker logs -f telegram-assistant
 | `YANDEX_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
 | `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
 | `VIP_USERNAMES` | NO | `vrmaks` | Comma-separated usernames whose mentions are always urgent |
+| `ONLINE_MENTION_DELAY_MINUTES` | NO | `10` | Delay before sending online notifications (skipped if message read) |
 
 ## Event Handlers
 
@@ -294,8 +295,9 @@ Incoming private message:
 ## Group Mention Notifications
 
 The bot sends notifications about mentions in group chats both when user is online and offline:
-- **Offline**: Notification sent via user client to PERSONAL_TG_LOGIN
-- **Online**: Notification sent via bot to owner's private chat (with "(вы онлайн)" indicator)
+- **Offline**: Notification sent immediately via user client to PERSONAL_TG_LOGIN
+- **Online + VIP sender**: Notification sent immediately via bot (always urgent)
+- **Online + regular sender**: Notification delayed by ONLINE_MENTION_DELAY_MINUTES, skipped if message read
 
 ### Flow
 ```
@@ -312,8 +314,13 @@ Incoming group message with @mention:
 │  ├─ AI detection (if Yandex GPT configured)
 │  └─ Keyword-based detection
 └─ Send notification:
-   ├─ Online → via bot to owner
-   └─ Offline → via user client to PERSONAL_TG_LOGIN
+   ├─ Offline → immediately via user client to PERSONAL_TG_LOGIN
+   ├─ Online + VIP → immediately via bot (urgent)
+   └─ Online + non-VIP → schedule with delay:
+      ├─ Wait ONLINE_MENTION_DELAY_MINUTES (default: 10)
+      ├─ Check if message was read
+      ├─ If read → skip notification
+      └─ If not read → send via bot
 ```
 
 ### Notification Format
@@ -346,6 +353,7 @@ Messages are considered urgent if:
 - `AVAILABLE_EMOJI_ID` - If set, this emoji means user is "online"
 - `MENTION_MESSAGE_LIMIT` - Max messages to fetch for context (default: 50)
 - `MENTION_TIME_LIMIT_MINUTES` - Max age of messages in context (default: 30)
+- `ONLINE_MENTION_DELAY_MINUTES` - Delay before sending online notifications (default: 10)
 
 Note: If a work schedule emoji is configured, having that emoji also means "online".
 
