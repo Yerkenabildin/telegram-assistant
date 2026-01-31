@@ -17,8 +17,8 @@ logger = get_logger('context_extraction')
 DEFAULT_CONTEXT_BEFORE_MINUTES = 30  # Minutes before anchor
 DEFAULT_FALLBACK_CONTEXT_MINUTES = 60  # When no reply chain
 DEFAULT_MAX_REPLY_CHAIN_DEPTH = 50  # Max messages in reply chain
-DEFAULT_CHUNK_SIZE = 15  # Messages per chunk for summarization
-DEFAULT_MAX_TOKENS_PER_CHUNK = 2000  # Approximate tokens per chunk
+DEFAULT_CHUNK_SIZE = 20  # Messages per chunk for summarization
+DEFAULT_MAX_TOKENS_PER_CHUNK = 8000  # Yandex GPT supports 32K, leave room for prompt/response
 
 
 @dataclass
