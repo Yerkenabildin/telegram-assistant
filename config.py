@@ -85,13 +85,13 @@ class Config:
 
     # Yandex GPT settings for AI-powered summarization
     # Get API key from https://console.cloud.yandex.ru/
-    yandex_gpt_api_key: Optional[str] = field(
-        default_factory=lambda: os.environ.get('YANDEX_GPT_API_KEY') or None
+    yandex_api_key: Optional[str] = field(
+        default_factory=lambda: os.environ.get('YANDEX_API_KEY') or None
     )
 
     # Yandex Cloud folder ID (required for Yandex GPT)
-    yandex_gpt_folder_id: Optional[str] = field(
-        default_factory=lambda: os.environ.get('YANDEX_GPT_FOLDER_ID') or None
+    yandex_folder_id: Optional[str] = field(
+        default_factory=lambda: os.environ.get('YANDEX_FOLDER_ID') or None
     )
 
     # Yandex GPT model (default: yandexgpt for quality, or yandexgpt-lite for speed)

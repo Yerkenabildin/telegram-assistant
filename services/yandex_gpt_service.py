@@ -213,13 +213,13 @@ def get_yandex_gpt_service() -> Optional[YandexGPTService]:
 
     from config import config
 
-    if not config.yandex_gpt_api_key or not config.yandex_gpt_folder_id:
+    if not config.yandex_api_key or not config.yandex_folder_id:
         logger.debug("Yandex GPT not configured (missing API key or folder ID)")
         return None
 
     _service_instance = YandexGPTService(
-        api_key=config.yandex_gpt_api_key,
-        folder_id=config.yandex_gpt_folder_id,
+        api_key=config.yandex_api_key,
+        folder_id=config.yandex_folder_id,
         model=config.yandex_gpt_model
     )
 

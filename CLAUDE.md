@@ -123,8 +123,8 @@ docker logs -f telegram-assistant
 | `AVAILABLE_EMOJI_ID` | NO | - | Emoji status ID that means user is "online" (disables mention notifications) |
 | `MENTION_MESSAGE_LIMIT` | NO | `50` | Maximum messages to fetch for mention context |
 | `MENTION_TIME_LIMIT_MINUTES` | NO | `30` | Maximum age (in minutes) of messages to include in context |
-| `YANDEX_GPT_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
-| `YANDEX_GPT_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
+| `YANDEX_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
+| `YANDEX_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
 | `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
 
 ## Event Handlers
@@ -341,7 +341,7 @@ Note: If a work schedule emoji is configured, having that emoji also means "onli
 
 ### AI Summarization (Yandex GPT)
 
-If `YANDEX_GPT_API_KEY` and `YANDEX_GPT_FOLDER_ID` are configured, the bot uses Yandex GPT for:
+If `YANDEX_API_KEY` and `YANDEX_FOLDER_ID` are configured, the bot uses Yandex GPT for:
 - **Smart summarization** - analyzes context and explains why user was mentioned
 - **Urgency detection** - AI determines if the situation requires immediate attention
 
@@ -353,8 +353,8 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
 3. Note your folder ID
 4. Set environment variables:
    ```
-   YANDEX_GPT_API_KEY=your-api-key-or-iam-token
-   YANDEX_GPT_FOLDER_ID=your-folder-id
+   YANDEX_API_KEY=your-api-key-or-iam-token
+   YANDEX_FOLDER_ID=your-folder-id
    YANDEX_GPT_MODEL=yandexgpt  # or yandexgpt-lite for faster/cheaper responses
    ```
 
