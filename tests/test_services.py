@@ -874,37 +874,37 @@ class TestMentionServiceGetChatLink:
                 chat_id_str = chat_id_str[4:]
             else:
                 chat_id_str = chat_id_str[1:]
-            return f"tg://privatepost?channel={chat_id_str}&post={message_id}"
         else:
-            return f"tg://privatepost?channel={chat_id}&post={message_id}"
+            chat_id_str = str(chat_id)
+        return f"https://t.me/c/{chat_id_str}/{message_id}"
 
     def test_supergroup_chat_link(self):
         """Test link generation for supergroup (starts with -100)."""
         chat_id = -1001234567890
         message_id = 42
         link = self._get_chat_link(chat_id, message_id)
-        assert link == "tg://privatepost?channel=1234567890&post=42"
+        assert link == "https://t.me/c/1234567890/42"
 
     def test_regular_group_chat_link(self):
         """Test link generation for regular group (starts with -)."""
         chat_id = -123456789
         message_id = 100
         link = self._get_chat_link(chat_id, message_id)
-        assert link == "tg://privatepost?channel=123456789&post=100"
+        assert link == "https://t.me/c/123456789/100"
 
     def test_positive_chat_id_link(self):
         """Test link generation for positive chat ID."""
         chat_id = 123456789
         message_id = 50
         link = self._get_chat_link(chat_id, message_id)
-        assert link == "tg://privatepost?channel=123456789&post=50"
+        assert link == "https://t.me/c/123456789/50"
 
     def test_link_contains_message_id(self):
         """Test that link contains correct message ID."""
         chat_id = -1001234567890
         message_id = 999
         link = self._get_chat_link(chat_id, message_id)
-        assert "post=999" in link
+        assert "/999" in link
 
 
 class TestMentionServiceFormatNotificationWithLink:
@@ -917,15 +917,15 @@ class TestMentionServiceFormatNotificationWithLink:
 
         # Simulate link generation
         chat_id_str = str(chat_id)[4:]  # Remove -100
-        link = f"tg://privatepost?channel={chat_id_str}&post={message_id}"
+        link = f"https://t.me/c/{chat_id_str}/{message_id}"
 
         # Build notification with link
         lines = ["📢 Упоминание в группе", ""]
         lines.append(f"🔗 Открыть сообщение: {link}")
         notification = "\n".join(lines)
 
-        assert "tg://privatepost" in notification
-        assert "post=42" in notification
+        assert "https://t.me/c/" in notification
+        assert "/42" in notification
 
     def test_no_link_when_message_id_none(self):
         """Test notification has no link when message_id is None."""

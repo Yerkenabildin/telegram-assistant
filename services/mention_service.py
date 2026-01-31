@@ -397,6 +397,9 @@ class MentionService:
         """
         Generate a deep link to the specific message in a chat.
 
+        Uses https://t.me/c/CHAT_ID/MSG_ID format which works for
+        private groups and supergroups.
+
         Args:
             chat_id: Chat ID (may be negative for groups)
             message_id: Message ID
@@ -405,13 +408,14 @@ class MentionService:
             Deep link URL
         """
         # Convert supergroup/channel ID format
+        # t.me/c/ format requires chat_id without -100 prefix
         if chat_id < 0:
-            # Remove -100 prefix for supergroups
             chat_id_str = str(chat_id)
             if chat_id_str.startswith('-100'):
                 chat_id_str = chat_id_str[4:]
             else:
                 chat_id_str = chat_id_str[1:]  # Remove just the minus
-            return f"tg://privatepost?channel={chat_id_str}&post={message_id}"
         else:
-            return f"tg://privatepost?channel={chat_id}&post={message_id}"
+            chat_id_str = str(chat_id)
+
+        return f"https://t.me/c/{chat_id_str}/{message_id}"
