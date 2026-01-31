@@ -103,7 +103,7 @@ class Config:
     vip_usernames: list[str] = field(
         default_factory=lambda: [
             u.strip().lower().lstrip('@')
-            for u in os.environ.get('VIP_USERNAMES', 'vrmaks').split(',')
+            for u in os.environ.get('VIP_USERNAMES', '').split(',')
             if u.strip()
         ]
     )

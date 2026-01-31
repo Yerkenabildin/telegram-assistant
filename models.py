@@ -220,6 +220,63 @@ class Settings(Model):
         else:
             Settings.set('settings_chat_id', str(chat_id))
 
+    # =========================================================================
+    # Autoreply Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_autoreply_enabled() -> bool:
+        """Check if autoreply is enabled (default: True)."""
+        value = Settings.get('autoreply_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_autoreply_enabled(enabled: bool) -> None:
+        """Enable or disable autoreply."""
+        Settings.set('autoreply_enabled', 'true' if enabled else 'false')
+
+    # =========================================================================
+    # Mention Notification Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_offline_mention_enabled() -> bool:
+        """Check if offline mention notifications are enabled (default: True)."""
+        value = Settings.get('offline_mention_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_offline_mention_enabled(enabled: bool) -> None:
+        """Enable or disable offline mention notifications."""
+        Settings.set('offline_mention_enabled', 'true' if enabled else 'false')
+
+    @staticmethod
+    def is_online_mention_enabled() -> bool:
+        """Check if online mention notifications are enabled (default: True)."""
+        value = Settings.get('online_mention_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_online_mention_enabled(enabled: bool) -> None:
+        """Enable or disable online mention notifications."""
+        Settings.set('online_mention_enabled', 'true' if enabled else 'false')
+
+    @staticmethod
+    def get_online_mention_delay() -> int:
+        """Get delay in minutes before sending online mention notifications (default: 10)."""
+        value = Settings.get('online_mention_delay')
+        if value is None:
+            return 10
+        try:
+            return int(value)
+        except ValueError:
+            return 10
+
+    @staticmethod
+    def set_online_mention_delay(minutes: int) -> None:
+        """Set delay in minutes before sending online mention notifications."""
+        Settings.set('online_mention_delay', str(minutes))
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""
@@ -695,6 +752,139 @@ class Schedule(Model):
             meeting.delete()
             return True
         return False
+
+
+class VipList(Model):
+    """
+    Model for storing VIP users and chats for urgent notifications.
+
+    VIP users' mentions are always treated as urgent.
+    VIP chats have all their mentions treated as urgent.
+
+    Attributes:
+        item_type: 'user' or 'chat'
+        item_id: username (without @) or chat_id as string
+        display_name: Optional display name
+    """
+
+    item_type: str
+    item_id: str
+    display_name: str
+
+    def __init__(self, id: Optional[int] = None):
+        Model.__init__(self, id, foreign_keys=True)
+
+    def tablename(self) -> str:
+        return 'vip_list'
+
+    def columns(self) -> list[dict[str, str]]:
+        return [
+            {'name': 'item_type', 'type': 'TEXT'},
+            {'name': 'item_id', 'type': 'TEXT'},
+            {'name': 'display_name', 'type': 'TEXT'}
+        ]
+
+    @staticmethod
+    def get_all() -> list['VipList']:
+        """Get all VIP entries."""
+        return VipList().select(SQL()) or []
+
+    @staticmethod
+    def get_users() -> list[str]:
+        """Get list of VIP usernames (lowercased)."""
+        entries = VipList().select(SQL().WHERE('item_type', '=', 'user')) or []
+        return [e.item_id.lower() for e in entries]
+
+    @staticmethod
+    def get_chats() -> list[int]:
+        """Get list of VIP chat IDs."""
+        entries = VipList().select(SQL().WHERE('item_type', '=', 'chat')) or []
+        result = []
+        for e in entries:
+            try:
+                result.append(int(e.item_id))
+            except ValueError:
+                pass
+        return result
+
+    @staticmethod
+    def add_user(username: str, display_name: str = None) -> 'VipList':
+        """Add a VIP user by username."""
+        username = username.lower().lstrip('@')
+        # Check if already exists
+        users = VipList().select(SQL().WHERE('item_type', '=', 'user')) or []
+        for u in users:
+            if u.item_id == username:
+                if display_name:
+                    u.display_name = display_name
+                    u.save()
+                return u
+
+        entry = VipList()
+        entry.item_type = 'user'
+        entry.item_id = username
+        entry.display_name = display_name or ''
+        entry.save()
+        return entry
+
+    @staticmethod
+    def add_chat(chat_id: int, display_name: str = None) -> 'VipList':
+        """Add a VIP chat by ID."""
+        chat_id_str = str(chat_id)
+        # Check if already exists
+        chats = VipList().select(SQL().WHERE('item_type', '=', 'chat')) or []
+        for c in chats:
+            if c.item_id == chat_id_str:
+                if display_name:
+                    c.display_name = display_name
+                    c.save()
+                return c
+
+        entry = VipList()
+        entry.item_type = 'chat'
+        entry.item_id = chat_id_str
+        entry.display_name = display_name or ''
+        entry.save()
+        return entry
+
+    @staticmethod
+    def remove(item_id: str) -> bool:
+        """Remove a VIP entry by item_id (username or chat_id)."""
+        item_id = item_id.lower().lstrip('@')
+        entry = VipList().selectOne(SQL().WHERE('item_id', '=', item_id))
+        if entry:
+            entry.delete()
+            return True
+        return False
+
+    @staticmethod
+    def remove_by_id(entry_id: int) -> bool:
+        """Remove a VIP entry by database ID."""
+        entries = VipList.get_all()
+        for entry in entries:
+            if entry.id == entry_id:
+                entry.delete()
+                return True
+        return False
+
+    @staticmethod
+    def migrate_from_env(env_usernames: list[str]) -> int:
+        """
+        Migrate VIP usernames from environment variable to database.
+
+        Args:
+            env_usernames: List of usernames from VIP_USERNAMES env var
+
+        Returns:
+            Number of users migrated
+        """
+        count = 0
+        for username in env_usernames:
+            username = username.strip()
+            if username:
+                VipList.add_user(username)
+                count += 1
+        return count
 
 
 def parse_days(days_str):

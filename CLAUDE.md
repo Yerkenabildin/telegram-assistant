@@ -52,27 +52,41 @@ The application runs up to three async services concurrently via `asyncio.gather
 
 ### Key Components
 
-| File | Lines | Purpose |
-|------|-------|---------|
-| `main.py` | ~300 | Entry point, orchestrates all services |
-| `handlers.py` | ~600 | User client event handlers (commands, auto-reply, mentions) |
-| `bot_handlers.py` | ~900 | Bot client handlers with inline keyboards and auth |
-| `routes.py` | ~150 | API routes (health, meeting) |
-| `models.py` | ~500 | SQLite ORM models (Reply, Settings, Schedule) |
-| `services/context_extraction_service.py` | ~400 | Anchor-based context extraction for mentions |
-| `services/mention_service.py` | ~450 | Mention notification logic and formatting |
-| `services/yandex_gpt_service.py` | ~400 | AI summarization with chunking support |
-| `./storage/` | - | Persistent data directory (session file, database) |
+| File | Purpose |
+|------|---------|
+| `main.py` | Entry point, orchestrates all services via asyncio.gather() |
+| `config.py` | Centralized configuration from environment variables |
+| `logging_config.py` | Structured logging setup |
+| `handlers.py` | User client event handlers (commands, auto-reply, mentions) |
+| `bot_handlers.py` | Bot client handlers with inline keyboards and auth |
+| `routes.py` | API routes (health, meeting) |
+| `models.py` | SQLite ORM models (Reply, Settings, Schedule) |
+| `services/autoreply_service.py` | Auto-reply logic and rate limiting |
+| `services/notification_service.py` | ASAP alerts and webhook calls |
+| `services/context_extraction_service.py` | Anchor-based context extraction for mentions |
+| `services/mention_service.py` | Mention notification logic and formatting |
+| `services/yandex_gpt_service.py` | AI summarization with chunking support |
+| `./storage/` | Persistent data directory (session file, database) |
 
 ### Module Dependencies
 
 ```
 main.py
-├── models.py (Reply, Settings)
+├── config.py (Config singleton)
+├── logging_config.py (structured logging)
+├── handlers.py (user client handlers)
+├── bot_handlers.py (bot client handlers)
+├── routes.py (Quart routes)
+├── models.py (Reply, Settings, Schedule)
 ├── Telethon (TelegramClient, events, types)
 ├── Quart (web framework)
 ├── Hypercorn (ASGI server)
 └── aiohttp (webhook calls)
+
+handlers.py
+├── services/autoreply_service.py
+├── services/notification_service.py
+└── services/mention_service.py
 
 models.py
 ├── sqlitemodel (ORM)
@@ -115,7 +129,7 @@ docker logs -f telegram-assistant
 | `API_ID` | YES | - | Telegram API ID (from my.telegram.org) |
 | `API_HASH` | YES | - | Telegram API hash |
 | `PERSONAL_TG_LOGIN` | YES | - | Username/ID for ASAP notifications |
-| `AVAILABLE_EMOJI_ID` | NO | `5810051751654460532` | Emoji status ID that disables auto-reply |
+| `AVAILABLE_EMOJI_ID` | NO | - | Emoji status ID that means user is "online" (disables auto-reply and mention notifications) |
 | `ASAP_WEBHOOK_URL` | NO | - | Webhook URL for urgent message notifications |
 | `SECRET_KEY` | NO | `os.urandom(24)` | Session encryption key |
 | `SCRIPT_NAME` | NO | - | Reverse proxy path prefix |
@@ -123,29 +137,30 @@ docker logs -f telegram-assistant
 | `MEETING_API_TOKEN` | NO | - | API token for `/api/meeting` endpoint (if not set, no auth required) |
 | `BOT_TOKEN` | NO | - | Telegram bot token from @BotFather for control interface |
 | `ALLOWED_USERNAME` | NO | - | Restrict bot authentication to this username only |
-| `AVAILABLE_EMOJI_ID` | NO | - | Emoji status ID that means user is "online" (disables mention notifications) |
 | `MENTION_MESSAGE_LIMIT` | NO | `50` | Maximum messages to fetch for mention context |
 | `MENTION_TIME_LIMIT_MINUTES` | NO | `30` | Maximum age (in minutes) of messages to include in context |
 | `YANDEX_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
 | `YANDEX_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
 | `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
-| `VIP_USERNAMES` | NO | `vrmaks` | Comma-separated usernames whose mentions are always urgent |
+| `VIP_USERNAMES` | NO | - | Comma-separated usernames whose mentions are always urgent |
 | `ONLINE_MENTION_DELAY_MINUTES` | NO | `10` | Delay before sending online notifications (skipped if message read) |
 
 ## Event Handlers
 
-Main Telethon event handlers in `main.py`:
+Main Telethon event handlers in `handlers.py`:
 
 | Handler | Pattern | Direction | Location | Purpose |
 |---------|---------|-----------|----------|---------|
-| `debug_outgoing` | All | Outgoing | Any | Logging (line 190-192) |
-| `select_settings_chat` | `/autoreply-settings` | Outgoing | Any | Configure settings chat (line 195-216) |
-| `disable_autoreply` | `/autoreply-off` | Outgoing | Settings chat | Disable bot (line 219-244) |
-| `setup_response` | `/set_for <emoji>` | Outgoing | Settings chat | Bind emoji to reply (line 247-290) |
-| `setup_response_current_status` | `/set` | Outgoing | Settings chat | Bind current status to reply (line 293-339) |
+| `debug_outgoing` | All | Outgoing | Any | Logging |
+| `select_settings_chat` | `/autoreply-settings` | Outgoing | Any | Configure settings chat |
+| `disable_autoreply` | `/autoreply-off` | Outgoing | Settings chat | Disable bot |
+| `setup_response` | `/set_for <emoji>` | Outgoing | Settings chat | Bind emoji to reply |
+| `setup_response_current_status` | `/set` | Outgoing | Settings chat | Bind current status to reply |
 | `asap_handler` | `.*ASAP.*` | Incoming | Private | Urgent notification |
-| `group_mention_handler` | All | Incoming | Groups | Mention notifications when offline |
+| `group_mention_handler` | All | Incoming | Groups | Mention notifications |
 | `new_messages` | All | Incoming | Private | Auto-reply logic |
+
+Bot handlers in `bot_handlers.py` provide inline keyboard interface for the same functionality.
 
 ## API Routes
 
@@ -211,12 +226,14 @@ The bot responds only to the authorized user (owner of the user client session).
 3. Send the reply message
 4. Auto-reply is saved for that emoji status
 
-7. **Meeting commands**: Configure meeting emoji for Zoom/calls integration (outgoing, only in settings chat)
-   - `/meeting` - Show current meeting emoji settings
-   - `/meeting <emoji>` - Set default emoji for meetings
-   - `/meeting clear` - Clear meeting emoji setting
+### Text Commands (in settings chat)
 
-8. **Schedule commands**: Manage scheduled emoji status changes (outgoing, only in settings chat)
+**Meeting commands** (Zoom/calls integration):
+- `/meeting` - Show current meeting emoji settings
+- `/meeting <emoji>` - Set default emoji for meetings
+- `/meeting clear` - Clear meeting emoji setting
+
+**Schedule commands** (emoji status scheduling):
    - `/schedule` - Show help for schedule commands
    - `/schedule work <emoji>` - Set work hours (Mon-Fri 12:00-20:00, priority 10)
    - `/schedule weekends <emoji>` - Set weekends (Fri 20:00 - Sun 23:59, priority 8)
@@ -229,7 +246,7 @@ The bot responds only to the authorized user (owner of the user client session).
    - `/schedule on/off` - Enable/disable scheduling
    - `/schedule status` - Show current status
 
-9. **Schedule checker**: Background task (runs every minute)
+**Schedule checker** (background task, runs every minute):
    - Checks if scheduling is enabled
    - Gets the emoji that should be active based on current time and date
    - Updates Telegram emoji status if it differs from scheduled
@@ -377,7 +394,7 @@ Messages are considered urgent if:
    - `blocker`, `prod`, `падает`, `упал`, `авария`, `incident`, `горит`
 
 ### Configuration
-- `VIP_USERNAMES` - Comma-separated usernames whose mentions are always urgent (default: `vrmaks`)
+- `VIP_USERNAMES` - Comma-separated usernames whose mentions are always urgent
 - `AVAILABLE_EMOJI_ID` - If set, this emoji means user is "online"
 - `MENTION_MESSAGE_LIMIT` - Max messages to fetch for context (default: 50)
 - `MENTION_TIME_LIMIT_MINUTES` - Max age of messages in context (default: 30)
@@ -432,12 +449,10 @@ pytest tests/test_models.py::TestReply::test_create_new_reply -v
 
 ## Known Issues / Technical Debt
 
-1. **Table name typo**: `replays` instead of `replies` in models.py:15
+1. **Table name typo**: `replays` instead of `replies` in models.py
 2. **Unused dependencies**: `requests`, `aiofiles`, `pyhumps`, `Flask` in requirements.txt
-3. **Hardcoded port**: 5050 in main.py:433 (should be env variable)
-4. **No input validation**: Phone number format not validated server-side
-5. **No rate limiting**: Web routes lack rate limiting protection
-6. **Print-based logging**: Should use Python's logging module with levels
+3. **No input validation**: Phone number format not validated server-side
+4. **No rate limiting**: Web routes lack rate limiting protection
 
 ## Code Style
 
