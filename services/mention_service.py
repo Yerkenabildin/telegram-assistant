@@ -258,6 +258,66 @@ class MentionService:
 
         return "\n".join(lines)
 
+    async def generate_summary_with_ai(
+        self,
+        messages: List[Any],
+        mention_message: Any,
+        chat_title: str
+    ) -> Tuple[str, Optional[bool]]:
+        """
+        Generate summary using Yandex GPT if available, otherwise fallback to keywords.
+
+        Args:
+            messages: List of messages (newest first)
+            mention_message: The message that contains the mention
+            chat_title: Title of the chat for context
+
+        Returns:
+            Tuple of (summary text, is_urgent from AI or None to use keyword detection)
+        """
+        from services.yandex_gpt_service import get_yandex_gpt_service
+
+        gpt_service = get_yandex_gpt_service()
+
+        if gpt_service is None:
+            logger.debug("Yandex GPT not configured, using keyword-based summary")
+            return self.generate_summary(messages, mention_message), None
+
+        # Prepare messages for GPT
+        mention_text = getattr(mention_message, 'text', '') or ''
+
+        # Get context messages (text only)
+        context_texts = []
+        found_mention = False
+        for msg in messages:
+            if msg.id == mention_message.id:
+                found_mention = True
+                continue
+            if found_mention and len(context_texts) < 5:
+                text = getattr(msg, 'text', '') or ''
+                if text.strip():
+                    context_texts.append(text)
+
+        # Reverse to get chronological order (oldest first)
+        context_texts = list(reversed(context_texts))
+
+        try:
+            summary, is_urgent = await gpt_service.summarize_mention(
+                messages=context_texts,
+                mention_message=mention_text,
+                chat_title=chat_title
+            )
+
+            if summary:
+                logger.info("Generated summary using Yandex GPT")
+                return summary, is_urgent
+
+        except Exception as e:
+            logger.warning(f"Yandex GPT failed, falling back to keywords: {e}")
+
+        # Fallback to keyword-based summary
+        return self.generate_summary(messages, mention_message), None
+
     def format_notification(
         self,
         chat_title: str,

@@ -202,11 +202,18 @@ def register_handlers(client):
             logger.warning(f"Failed to fetch messages for context: {e}")
             messages = [event.message]
 
-        # Generate summary
-        summary = _mention_service.generate_summary(messages, event.message)
+        # Generate summary (try AI first, fallback to keywords)
+        summary, ai_urgency = await _mention_service.generate_summary_with_ai(
+            messages, event.message, chat_title
+        )
 
-        # Check urgency
-        is_urgent = _mention_service.is_urgent(messages)
+        # Check urgency: use AI detection if available, otherwise keyword-based
+        if ai_urgency is not None:
+            is_urgent = ai_urgency
+            logger.debug(f"Urgency from AI: {is_urgent}")
+        else:
+            is_urgent = _mention_service.is_urgent(messages)
+            logger.debug(f"Urgency from keywords: {is_urgent}")
 
         # Format notification
         notification = _mention_service.format_notification(

@@ -83,6 +83,22 @@ class Config:
         default_factory=lambda: int(os.environ.get('MENTION_TIME_LIMIT_MINUTES', 30))
     )
 
+    # Yandex GPT settings for AI-powered summarization
+    # Get API key from https://console.cloud.yandex.ru/
+    yandex_gpt_api_key: Optional[str] = field(
+        default_factory=lambda: os.environ.get('YANDEX_GPT_API_KEY') or None
+    )
+
+    # Yandex Cloud folder ID (required for Yandex GPT)
+    yandex_gpt_folder_id: Optional[str] = field(
+        default_factory=lambda: os.environ.get('YANDEX_GPT_FOLDER_ID') or None
+    )
+
+    # Yandex GPT model (default: yandexgpt-lite for speed, or yandexgpt for quality)
+    yandex_gpt_model: str = field(
+        default_factory=lambda: os.environ.get('YANDEX_GPT_MODEL', 'yandexgpt-lite')
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
