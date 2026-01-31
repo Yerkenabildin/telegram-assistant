@@ -17,7 +17,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply
+from models import Reply, Settings
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 from services.mention_service import MentionService
@@ -307,7 +307,7 @@ def _schedule_pending_mention(
         sender_name: Name of person who mentioned
     """
     key = f"{chat_id}:{message_id}"
-    delay_minutes = config.online_mention_delay_minutes
+    delay_minutes = Settings.get_online_mention_delay()
 
     _pending_mentions[key] = PendingMention(
         chat_id=chat_id,
@@ -403,6 +403,16 @@ def register_handlers(client, bot=None):
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
         is_online = not _mention_service.should_notify(emoji_status_id)
 
+        # Check if mention notifications are enabled for this mode
+        if is_online:
+            if not Settings.is_online_mention_enabled():
+                logger.debug("Online mention notifications disabled, skipping")
+                return
+        else:
+            if not Settings.is_offline_mention_enabled():
+                logger.debug("Offline mention notifications disabled, skipping")
+                return
+
         # Get chat info
         chat = await event.get_chat()
         chat_title = getattr(chat, 'title', 'Unknown chat')
@@ -469,11 +479,16 @@ def register_handlers(client, bot=None):
             extracted_context=extracted_context
         )
 
-        # Check urgency: VIP sender always urgent, then AI, then keywords
-        is_vip = _mention_service.is_vip_sender(sender_username)
+        # Check urgency: VIP sender/chat always urgent, then AI, then keywords
+        is_vip_sender = _mention_service.is_vip_sender(sender_username)
+        is_vip_chat = _mention_service.is_vip_chat(event.chat_id)
+        is_vip = is_vip_sender or is_vip_chat
         if is_vip:
             is_urgent = True
-            logger.debug(f"Urgency from VIP sender: {sender_username}")
+            if is_vip_sender:
+                logger.debug(f"Urgency from VIP sender: {sender_username}")
+            else:
+                logger.debug(f"Urgency from VIP chat: {event.chat_id}")
         elif ai_urgency is not None:
             is_urgent = ai_urgency
             logger.debug(f"Urgency from AI: {is_urgent}")
@@ -555,6 +570,10 @@ def register_handlers(client, bot=None):
     async def new_messages(event):
         """Handle incoming messages for auto-reply."""
         if not event.is_private:
+            return
+
+        # Check if autoreply is enabled
+        if not Settings.is_autoreply_enabled():
             return
 
         sender = await event.get_sender()

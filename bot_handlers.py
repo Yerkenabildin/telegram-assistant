@@ -70,7 +70,7 @@ from sqlitemodel import SQL
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
+from models import Reply, Settings, Schedule, VipList, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
 
 
 # =============================================================================
@@ -175,9 +175,10 @@ def get_auth_cancel_keyboard():
 def get_main_menu_keyboard():
     """Main menu keyboard."""
     return [
-        [Button.inline("📊 Статус", b"status")],
-        [Button.inline("📝 Автоответы", b"replies"), Button.inline("📅 Расписание", b"schedule")],
-        [Button.inline("📞 Встречи", b"meeting"), Button.inline("⚙️ Настройки", b"settings")],
+        [Button.inline("📅 Расписание статусов", b"schedule")],
+        [Button.inline("📝 Автоответы", b"replies")],
+        [Button.inline("🔔 Контекст призыва", b"mentions")],
+        [Button.inline("⚙️ Настройки", b"settings")],
     ]
 
 
@@ -306,10 +307,93 @@ def get_meeting_keyboard():
 def get_settings_keyboard():
     """Settings keyboard."""
     return [
-        [Button.inline("❌ Отключить автоответчик", b"autoreply_off_confirm")],
         [Button.inline("🚪 Выйти из аккаунта", b"logout_confirm")],
         [Button.inline("« Назад", b"main")],
     ]
+
+
+def get_mentions_keyboard():
+    """Mentions configuration main menu."""
+    return [
+        [Button.inline("📴 Во время отсутствия", b"mention_offline")],
+        [Button.inline("📱 Во время онлайн", b"mention_online")],
+        [Button.inline("⭐ Приоритетные", b"mention_vip")],
+        [Button.inline("« Назад", b"main")],
+    ]
+
+
+def get_mention_offline_keyboard():
+    """Offline mention settings keyboard."""
+    is_enabled = Settings.is_offline_mention_enabled()
+    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_data = b"offline_mention_off" if is_enabled else b"offline_mention_on"
+
+    return [
+        [Button.inline(toggle_text, toggle_data)],
+        [Button.inline("« Назад", b"mentions")],
+    ]
+
+
+def get_mention_online_keyboard():
+    """Online mention settings keyboard."""
+    is_enabled = Settings.is_online_mention_enabled()
+    delay = Settings.get_online_mention_delay()
+    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_data = b"online_mention_off" if is_enabled else b"online_mention_on"
+
+    if delay > 0:
+        delay_text = f"⏱ Задержка: {delay} мин"
+    else:
+        delay_text = "⏱ Задержка: без задержки"
+
+    return [
+        [Button.inline(toggle_text, toggle_data)],
+        [Button.inline(delay_text, b"online_delay_edit")],
+        [Button.inline("« Назад", b"mentions")],
+    ]
+
+
+def get_vip_keyboard():
+    """VIP management main keyboard."""
+    return [
+        [Button.inline("👤 Пользователи", b"vip_users")],
+        [Button.inline("💬 Чаты", b"vip_chats")],
+        [Button.inline("« Назад", b"mentions")],
+    ]
+
+
+def get_vip_users_keyboard():
+    """VIP users list with add/delete buttons."""
+    users = VipList().select(SQL().WHERE('item_type', '=', 'user')) or []
+
+    buttons = []
+    for u in users[:10]:
+        display = u.display_name if u.display_name else f"@{u.item_id}"
+        buttons.append([
+            Button.inline(f"👤 {display}", f"vip_user_view:{u.id}".encode()),
+            Button.inline("🗑", f"vip_del:{u.id}".encode())
+        ])
+
+    buttons.append([Button.inline("➕ Добавить", b"vip_add_user")])
+    buttons.append([Button.inline("« Назад", b"mention_vip")])
+    return buttons
+
+
+def get_vip_chats_keyboard():
+    """VIP chats list with add/delete buttons."""
+    chats = VipList().select(SQL().WHERE('item_type', '=', 'chat')) or []
+
+    buttons = []
+    for c in chats[:10]:
+        display = c.display_name if c.display_name else f"ID: {c.item_id}"
+        buttons.append([
+            Button.inline(f"💬 {display}", f"vip_chat_view:{c.id}".encode()),
+            Button.inline("🗑", f"vip_del:{c.id}".encode())
+        ])
+
+    buttons.append([Button.inline("➕ Добавить", b"vip_add_chat")])
+    buttons.append([Button.inline("« Назад", b"mention_vip")])
+    return buttons
 
 
 def get_confirm_keyboard(action: str):
@@ -322,9 +406,14 @@ def get_confirm_keyboard(action: str):
 
 def get_replies_keyboard():
     """Replies management keyboard."""
+    is_enabled = Settings.is_autoreply_enabled()
+    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_data = b"autoreply_toggle_off" if is_enabled else b"autoreply_toggle_on"
+
     return [
         [Button.inline("📋 Список автоответов", b"replies_list")],
         [Button.inline("➕ Добавить", b"reply_add")],
+        [Button.inline(toggle_text, toggle_data)],
         [Button.inline("« Назад", b"main")],
     ]
 
@@ -1311,44 +1400,12 @@ def register_bot_handlers(bot, user_client=None):
         text = "⚙️ **Настройки**\n\n"
 
         if settings_chat_id:
-            text += f"Настроечный чат: `{settings_chat_id}`\n"
-            text += "Автоответчик: ✅ активен"
+            text += f"Настроечный чат: `{settings_chat_id}`"
         else:
-            text += "Автоответчик: ❌ не настроен\n"
+            text += "Настроечный чат: не настроен\n"
             text += "Отправьте `/autoreply-settings` в любом чате для настройки."
 
         await event.edit(text, buttons=get_settings_keyboard())
-
-    @bot.on(events.CallbackQuery(data=b"autoreply_off_confirm"))
-    async def autoreply_off_confirm(event):
-        """Confirm autoreply disable."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
-            return
-
-        await event.edit(
-            "⚠️ **Отключить автоответчик?**\n\n"
-            "Вам нужно будет заново отправить `/autoreply-settings` для включения.",
-            buttons=get_confirm_keyboard("autoreply_off")
-        )
-
-    @bot.on(events.CallbackQuery(data=b"confirm_autoreply_off"))
-    async def autoreply_off(event):
-        """Disable autoreply."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
-            return
-
-        Settings.set_settings_chat_id(None)
-        logger.info("Autoreply disabled via bot")
-
-        await event.answer("❌ Автоответчик отключён")
-        await event.edit(
-            "⚙️ **Настройки**\n\n"
-            "Автоответчик: ❌ отключён\n\n"
-            "Отправьте `/autoreply-settings` в любом чате для включения.",
-            buttons=get_settings_keyboard()
-        )
 
     @bot.on(events.CallbackQuery(data=b"logout_confirm"))
     async def logout_confirm(event):
@@ -1646,6 +1703,129 @@ def register_bot_handlers(bot, user_client=None):
         # Reply/Schedule setup flow (only for authorized owner)
         # =====================================================================
         if not await _is_owner(event):
+            return
+
+        # Check if user is editing online mention delay
+        if event.sender_id in _pending_delay_edit:
+            text = event.message.text.strip() if event.message.text else ""
+            try:
+                minutes = int(text)
+                if 0 <= minutes <= 60:
+                    Settings.set_online_mention_delay(minutes)
+                    _pending_delay_edit.discard(event.sender_id)
+                    logger.info(f"Online mention delay set to {minutes} minutes")
+
+                    if minutes > 0:
+                        await event.respond(
+                            f"✅ Задержка установлена: {minutes} мин",
+                            buttons=get_mention_online_keyboard()
+                        )
+                    else:
+                        await event.respond(
+                            "✅ Задержка отключена (уведомления сразу)",
+                            buttons=get_mention_online_keyboard()
+                        )
+                else:
+                    await event.respond(
+                        "❌ Введите число от 0 до 60.",
+                        buttons=[[Button.inline("❌ Отмена", b"online_delay_cancel")]]
+                    )
+            except ValueError:
+                await event.respond(
+                    "❌ Введите число от 0 до 60.",
+                    buttons=[[Button.inline("❌ Отмена", b"online_delay_cancel")]]
+                )
+            return
+
+        # Check if user is adding VIP user
+        if event.sender_id in _pending_vip_user:
+            text = event.message.text.strip() if event.message.text else ""
+            if text:
+                username = text.lower().lstrip('@')
+                VipList.add_user(username)
+                _pending_vip_user.discard(event.sender_id)
+                logger.info(f"VIP user added: @{username}")
+
+                await event.respond(
+                    f"✅ Пользователь @{username} добавлен!",
+                    buttons=get_vip_users_keyboard()
+                )
+            else:
+                await event.respond(
+                    "❌ Отправьте username пользователя.",
+                    buttons=[[Button.inline("❌ Отмена", b"vip_add_user_cancel")]]
+                )
+            return
+
+        # Check if user is adding VIP chat
+        if event.sender_id in _pending_vip_chat:
+            # Check if message is forwarded
+            fwd = event.message.fwd_from
+            if fwd and hasattr(fwd, 'from_id') and fwd.from_id:
+                # Get chat ID from forwarded message
+                from_id = fwd.from_id
+                if hasattr(from_id, 'channel_id'):
+                    chat_id = -100 * 10**10 + from_id.channel_id
+                    chat_id = int(f"-100{from_id.channel_id}")
+                elif hasattr(from_id, 'chat_id'):
+                    chat_id = -from_id.chat_id
+                else:
+                    await event.respond(
+                        "❌ Не удалось определить ID чата.\n"
+                        "Попробуйте ввести ID вручную.",
+                        buttons=[[Button.inline("❌ Отмена", b"vip_add_chat_cancel")]]
+                    )
+                    return
+
+                # Try to get chat name
+                try:
+                    chat_entity = await _user_client.get_entity(chat_id)
+                    chat_title = getattr(chat_entity, 'title', None) or str(chat_id)
+                except Exception:
+                    chat_title = str(chat_id)
+
+                VipList.add_chat(chat_id, chat_title)
+                _pending_vip_chat.discard(event.sender_id)
+                logger.info(f"VIP chat added: {chat_id} ({chat_title})")
+
+                await event.respond(
+                    f"✅ Чат добавлен!\n\n{chat_title}",
+                    buttons=get_vip_chats_keyboard()
+                )
+                return
+
+            # Try to parse chat ID from text
+            text = event.message.text.strip() if event.message.text else ""
+            if text:
+                try:
+                    chat_id = int(text)
+                    # Try to get chat name
+                    try:
+                        chat_entity = await _user_client.get_entity(chat_id)
+                        chat_title = getattr(chat_entity, 'title', None) or str(chat_id)
+                    except Exception:
+                        chat_title = str(chat_id)
+
+                    VipList.add_chat(chat_id, chat_title)
+                    _pending_vip_chat.discard(event.sender_id)
+                    logger.info(f"VIP chat added: {chat_id} ({chat_title})")
+
+                    await event.respond(
+                        f"✅ Чат добавлен!\n\n{chat_title}",
+                        buttons=get_vip_chats_keyboard()
+                    )
+                except ValueError:
+                    await event.respond(
+                        "❌ Перешлите сообщение из чата\n"
+                        "или введите числовой ID.",
+                        buttons=[[Button.inline("❌ Отмена", b"vip_add_chat_cancel")]]
+                    )
+            else:
+                await event.respond(
+                    "❌ Перешлите сообщение из чата\n"
+                    "или введите числовой ID.",
+                    buttons=[[Button.inline("❌ Отмена", b"vip_add_chat_cancel")]]
+                )
             return
 
         # Check if user is editing work schedule (time or emoji)
@@ -1965,3 +2145,324 @@ def register_bot_handlers(bot, user_client=None):
             "❌ Настройка автоответа отменена.",
             buttons=get_main_menu_keyboard()
         )
+
+    # =========================================================================
+    # Autoreply Toggle
+    # =========================================================================
+
+    @bot.on(events.CallbackQuery(data=b"autoreply_toggle_on"))
+    async def autoreply_toggle_on(event):
+        """Enable autoreply."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_autoreply_enabled(True)
+        logger.info("Autoreply enabled via bot")
+        await event.answer("✅ Автоответы включены")
+        await replies_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"autoreply_toggle_off"))
+    async def autoreply_toggle_off(event):
+        """Disable autoreply."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_autoreply_enabled(False)
+        logger.info("Autoreply disabled via bot")
+        await event.answer("🔴 Автоответы выключены")
+        await replies_menu(event)
+
+    # =========================================================================
+    # Mentions Menu
+    # =========================================================================
+
+    @bot.on(events.CallbackQuery(data=b"mentions"))
+    async def mentions_menu(event):
+        """Show mentions configuration menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        offline_status = "✅" if Settings.is_offline_mention_enabled() else "❌"
+        online_status = "✅" if Settings.is_online_mention_enabled() else "❌"
+        delay = Settings.get_online_mention_delay()
+        vip_count = len(VipList.get_all())
+
+        text = (
+            "🔔 **Уведомления о призыве**\n\n"
+            f"📴 Во время отсутствия: {offline_status}\n"
+            f"📱 Во время онлайн: {online_status}"
+        )
+        if Settings.is_online_mention_enabled() and delay > 0:
+            text += f" (задержка {delay} мин)"
+        text += f"\n⭐ Приоритетных: {vip_count}"
+
+        await event.edit(text, buttons=get_mentions_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"mention_offline"))
+    async def mention_offline_menu(event):
+        """Show offline mention settings."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        is_enabled = Settings.is_offline_mention_enabled()
+        status = "✅ включены" if is_enabled else "❌ выключены"
+
+        text = (
+            "📴 **Уведомления во время отсутствия**\n\n"
+            f"Статус: {status}\n\n"
+            "Уведомления приходят сразу, когда вас упоминают\n"
+            "в группе, а у вас не рабочий эмодзи-статус."
+        )
+
+        await event.edit(text, buttons=get_mention_offline_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"mention_online"))
+    async def mention_online_menu(event):
+        """Show online mention settings."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        is_enabled = Settings.is_online_mention_enabled()
+        delay = Settings.get_online_mention_delay()
+        status = "✅ включены" if is_enabled else "❌ выключены"
+
+        text = (
+            "📱 **Уведомления во время онлайн**\n\n"
+            f"Статус: {status}\n"
+        )
+        if delay > 0:
+            text += f"Задержка: {delay} мин\n\n"
+            text += "Если вы не прочитаете сообщение за это время,\n"
+            text += "вам придёт уведомление."
+        else:
+            text += "Задержка: без задержки\n\n"
+            text += "Уведомления приходят сразу."
+
+        await event.edit(text, buttons=get_mention_online_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"offline_mention_on"))
+    async def offline_mention_enable(event):
+        """Enable offline mention notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_offline_mention_enabled(True)
+        logger.info("Offline mention notifications enabled")
+        await event.answer("✅ Уведомления включены")
+        await mention_offline_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"offline_mention_off"))
+    async def offline_mention_disable(event):
+        """Disable offline mention notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_offline_mention_enabled(False)
+        logger.info("Offline mention notifications disabled")
+        await event.answer("🔴 Уведомления выключены")
+        await mention_offline_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"online_mention_on"))
+    async def online_mention_enable(event):
+        """Enable online mention notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_online_mention_enabled(True)
+        logger.info("Online mention notifications enabled")
+        await event.answer("✅ Уведомления включены")
+        await mention_online_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"online_mention_off"))
+    async def online_mention_disable(event):
+        """Disable online mention notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_online_mention_enabled(False)
+        logger.info("Online mention notifications disabled")
+        await event.answer("🔴 Уведомления выключены")
+        await mention_online_menu(event)
+
+    # Store users waiting to input delay
+    _pending_delay_edit: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"online_delay_edit"))
+    async def online_delay_edit_start(event):
+        """Start editing online mention delay."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_delay_edit.add(event.sender_id)
+        current = Settings.get_online_mention_delay()
+
+        await event.edit(
+            f"⏱ **Настройка задержки**\n\n"
+            f"Текущая задержка: {current} мин\n\n"
+            f"Отправьте число от 0 до 60:\n"
+            f"• `0` — без задержки (сразу)\n"
+            f"• `5` — 5 минут\n"
+            f"• `10` — 10 минут (по умолчанию)",
+            buttons=[[Button.inline("❌ Отмена", b"online_delay_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"online_delay_cancel"))
+    async def online_delay_cancel(event):
+        """Cancel delay editing."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_delay_edit.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await mention_online_menu(event)
+
+    # =========================================================================
+    # VIP Menu
+    # =========================================================================
+
+    @bot.on(events.CallbackQuery(data=b"mention_vip"))
+    async def mention_vip_menu(event):
+        """Show VIP management menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        users = VipList.get_users()
+        chats = VipList.get_chats()
+
+        text = (
+            "⭐ **Приоритетные**\n\n"
+            "Упоминания от приоритетных пользователей\n"
+            "и в приоритетных чатах всегда срочные.\n\n"
+            f"👤 Пользователей: {len(users)}\n"
+            f"💬 Чатов: {len(chats)}"
+        )
+
+        await event.edit(text, buttons=get_vip_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"vip_users"))
+    async def vip_users_menu(event):
+        """Show VIP users list."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        users = VipList().select(SQL().WHERE('item_type', '=', 'user')) or []
+
+        if users:
+            text = "👤 **Приоритетные пользователи**\n\n"
+            for u in users[:10]:
+                display = u.display_name if u.display_name else f"@{u.item_id}"
+                text += f"• {display}\n"
+        else:
+            text = "👤 **Приоритетные пользователи**\n\nСписок пуст."
+
+        await event.edit(text, buttons=get_vip_users_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"vip_chats"))
+    async def vip_chats_menu(event):
+        """Show VIP chats list."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        chats = VipList().select(SQL().WHERE('item_type', '=', 'chat')) or []
+
+        if chats:
+            text = "💬 **Приоритетные чаты**\n\n"
+            for c in chats[:10]:
+                display = c.display_name if c.display_name else f"ID: {c.item_id}"
+                text += f"• {display}\n"
+        else:
+            text = "💬 **Приоритетные чаты**\n\nСписок пуст."
+
+        await event.edit(text, buttons=get_vip_chats_keyboard())
+
+    # Store users waiting to input VIP username/chat
+    _pending_vip_user: set[int] = set()
+    _pending_vip_chat: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"vip_add_user"))
+    async def vip_add_user_start(event):
+        """Start adding VIP user."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_vip_user.add(event.sender_id)
+
+        await event.edit(
+            "👤 **Добавить пользователя**\n\n"
+            "Отправьте username пользователя\n"
+            "(с @ или без):",
+            buttons=[[Button.inline("❌ Отмена", b"vip_add_user_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"vip_add_user_cancel"))
+    async def vip_add_user_cancel(event):
+        """Cancel adding VIP user."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_vip_user.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await vip_users_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"vip_add_chat"))
+    async def vip_add_chat_start(event):
+        """Start adding VIP chat."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_vip_chat.add(event.sender_id)
+
+        await event.edit(
+            "💬 **Добавить чат**\n\n"
+            "Перешлите любое сообщение из чата,\n"
+            "который хотите добавить.\n\n"
+            "Или отправьте ID чата вручную.",
+            buttons=[[Button.inline("❌ Отмена", b"vip_add_chat_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"vip_add_chat_cancel"))
+    async def vip_add_chat_cancel(event):
+        """Cancel adding VIP chat."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_vip_chat.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await vip_chats_menu(event)
+
+    @bot.on(events.CallbackQuery(pattern=rb"vip_del:(\d+)"))
+    async def vip_delete(event):
+        """Delete VIP entry."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        entry_id = int(event.pattern_match.group(1))
+        if VipList.remove_by_id(entry_id):
+            logger.info(f"VIP entry #{entry_id} deleted")
+            await event.answer("✅ Удалено")
+        else:
+            await event.answer("❌ Не найдено", alert=True)
+
+        # Refresh the appropriate menu
+        await mention_vip_menu(event)
+
+    # Handle VIP input in handle_private_message - need to add check there

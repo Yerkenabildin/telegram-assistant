@@ -17,7 +17,7 @@ from telethon.errors import AuthKeyUnregisteredError
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule
+from models import Reply, Settings, Schedule, VipList
 from routes import register_routes
 from handlers import register_handlers
 from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username, set_bot_username
@@ -93,7 +93,24 @@ async def startup():
     Reply().createTable()
     Settings().createTable()
     Schedule().createTable()
+    VipList().createTable()
     logger.info("Database tables initialized")
+
+    # Migrate VIP usernames from environment to database
+    await migrate_vip_from_env()
+
+
+async def migrate_vip_from_env():
+    """Migrate VIP_USERNAMES from ENV to database on first run."""
+    # Skip if already have VIP entries in database
+    if VipList.get_all():
+        return
+
+    # Migrate from config if present
+    if config.vip_usernames:
+        count = VipList.migrate_from_env(config.vip_usernames)
+        if count > 0:
+            logger.info(f"Migrated {count} VIP users from environment to database")
 
 
 @app.after_serving

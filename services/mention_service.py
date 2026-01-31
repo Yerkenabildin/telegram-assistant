@@ -8,7 +8,7 @@ from typing import Optional, Any, List, Tuple
 import re
 
 from logging_config import get_logger
-from models import Schedule
+from models import Schedule, VipList
 
 logger = get_logger('mention')
 
@@ -141,17 +141,44 @@ class MentionService:
         """
         Check if sender is a VIP whose mentions are always urgent.
 
+        First checks VipList in database, then falls back to config.
+
         Args:
             sender_username: Username of the sender (without @)
 
         Returns:
             True if sender is in VIP list
         """
-        if not sender_username or not self.vip_usernames:
+        if not sender_username:
             return False
-        is_vip = sender_username.lower() in self.vip_usernames
+
+        # Check database first
+        vip_users = VipList.get_users()
+        if sender_username.lower() in vip_users:
+            logger.debug(f"VIP sender detected (from DB): @{sender_username}")
+            return True
+
+        # Fallback to config (for backwards compatibility)
+        if self.vip_usernames and sender_username.lower() in self.vip_usernames:
+            logger.debug(f"VIP sender detected (from config): @{sender_username}")
+            return True
+
+        return False
+
+    def is_vip_chat(self, chat_id: int) -> bool:
+        """
+        Check if chat is a VIP chat where all mentions are urgent.
+
+        Args:
+            chat_id: Chat ID
+
+        Returns:
+            True if chat is in VIP list
+        """
+        vip_chats = VipList.get_chats()
+        is_vip = chat_id in vip_chats
         if is_vip:
-            logger.debug(f"VIP sender detected: @{sender_username}")
+            logger.debug(f"VIP chat detected: {chat_id}")
         return is_vip
 
     def filter_messages_by_time(

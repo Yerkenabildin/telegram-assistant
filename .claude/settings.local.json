@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(python3 -m pytest:*)",
+      "Bash(pip3 --version:*)",
+      "Bash(/opt/homebrew/bin/python3 -m py_compile:*)",
+      "Bash(/opt/homebrew/bin/python3:*)"
     ]
   }
 }
