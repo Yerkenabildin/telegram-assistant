@@ -630,30 +630,30 @@ class TestMentionServiceIsVipSender:
 
     def test_returns_true_for_vip_username(self):
         """Test returns True when sender is in VIP list."""
-        vip_usernames = ['vrmaks', 'admin']
-        assert self._is_vip_sender(vip_usernames, 'vrmaks') is True
+        vip_usernames = ['vip_user', 'admin']
+        assert self._is_vip_sender(vip_usernames, 'vip_user') is True
         assert self._is_vip_sender(vip_usernames, 'admin') is True
 
     def test_returns_false_for_non_vip_username(self):
         """Test returns False when sender is not in VIP list."""
-        vip_usernames = ['vrmaks']
+        vip_usernames = ['vip_user']
         assert self._is_vip_sender(vip_usernames, 'someuser') is False
 
     def test_case_insensitive(self):
         """Test VIP check is case insensitive."""
-        vip_usernames = ['VrMaks']
-        assert self._is_vip_sender(vip_usernames, 'vrmaks') is True
-        assert self._is_vip_sender(vip_usernames, 'VRMAKS') is True
+        vip_usernames = ['VipUser']
+        assert self._is_vip_sender(vip_usernames, 'vipuser') is True
+        assert self._is_vip_sender(vip_usernames, 'VIPUSER') is True
 
     def test_returns_false_for_none_username(self):
         """Test returns False when username is None."""
-        vip_usernames = ['vrmaks']
+        vip_usernames = ['vip_user']
         assert self._is_vip_sender(vip_usernames, None) is False
 
     def test_returns_false_when_no_vip_list(self):
         """Test returns False when VIP list is empty."""
-        assert self._is_vip_sender([], 'vrmaks') is False
-        assert self._is_vip_sender(None, 'vrmaks') is False
+        assert self._is_vip_sender([], 'vip_user') is False
+        assert self._is_vip_sender(None, 'vip_user') is False
 
 
 class TestMentionServiceFilterMessagesByTime:
@@ -1363,8 +1363,8 @@ class TestOnlineMentionNotification:
 
     def test_vip_sender_always_urgent_when_online(self):
         """Test VIP sender mentions are urgent even when online."""
-        vip_usernames = ['vrmaks']
-        sender_username = 'vrmaks'
+        vip_usernames = ['vip_user']
+        sender_username = 'vip_user'
         is_online = True
 
         is_vip = sender_username.lower() in [v.lower() for v in vip_usernames]

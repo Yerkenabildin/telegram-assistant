@@ -142,7 +142,7 @@ docker logs -f telegram-assistant
 | `YANDEX_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
 | `YANDEX_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
 | `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
-| `VIP_USERNAMES` | NO | `vrmaks` | Comma-separated usernames whose mentions are always urgent |
+| `VIP_USERNAMES` | NO | - | Comma-separated usernames whose mentions are always urgent |
 | `ONLINE_MENTION_DELAY_MINUTES` | NO | `10` | Delay before sending online notifications (skipped if message read) |
 
 ## Event Handlers
@@ -394,7 +394,7 @@ Messages are considered urgent if:
    - `blocker`, `prod`, `падает`, `упал`, `авария`, `incident`, `горит`
 
 ### Configuration
-- `VIP_USERNAMES` - Comma-separated usernames whose mentions are always urgent (default: `vrmaks`)
+- `VIP_USERNAMES` - Comma-separated usernames whose mentions are always urgent
 - `AVAILABLE_EMOJI_ID` - If set, this emoji means user is "online"
 - `MENTION_MESSAGE_LIMIT` - Max messages to fetch for context (default: 50)
 - `MENTION_TIME_LIMIT_MINUTES` - Max age of messages in context (default: 30)
