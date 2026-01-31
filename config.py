@@ -99,6 +99,21 @@ class Config:
         default_factory=lambda: os.environ.get('YANDEX_GPT_MODEL', 'yandexgpt')
     )
 
+    # VIP usernames whose mentions are always treated as urgent (comma-separated)
+    vip_usernames: list[str] = field(
+        default_factory=lambda: [
+            u.strip().lower().lstrip('@')
+            for u in os.environ.get('VIP_USERNAMES', 'vrmaks').split(',')
+            if u.strip()
+        ]
+    )
+
+    # Delay before sending online mention notification (in minutes)
+    # If message is read within this time, notification won't be sent
+    online_mention_delay_minutes: int = field(
+        default_factory=lambda: int(os.environ.get('ONLINE_MENTION_DELAY_MINUTES', '10'))
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []

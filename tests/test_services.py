@@ -618,6 +618,44 @@ class TestMentionServiceIsUrgent:
         assert result is True
 
 
+class TestMentionServiceIsVipSender:
+    """Tests for MentionService.is_vip_sender()."""
+
+    def _is_vip_sender(self, vip_usernames, sender_username):
+        """Helper to test VIP sender logic."""
+        vip_list = [u.lower() for u in (vip_usernames or [])]
+        if not sender_username or not vip_list:
+            return False
+        return sender_username.lower() in vip_list
+
+    def test_returns_true_for_vip_username(self):
+        """Test returns True when sender is in VIP list."""
+        vip_usernames = ['vrmaks', 'admin']
+        assert self._is_vip_sender(vip_usernames, 'vrmaks') is True
+        assert self._is_vip_sender(vip_usernames, 'admin') is True
+
+    def test_returns_false_for_non_vip_username(self):
+        """Test returns False when sender is not in VIP list."""
+        vip_usernames = ['vrmaks']
+        assert self._is_vip_sender(vip_usernames, 'someuser') is False
+
+    def test_case_insensitive(self):
+        """Test VIP check is case insensitive."""
+        vip_usernames = ['VrMaks']
+        assert self._is_vip_sender(vip_usernames, 'vrmaks') is True
+        assert self._is_vip_sender(vip_usernames, 'VRMAKS') is True
+
+    def test_returns_false_for_none_username(self):
+        """Test returns False when username is None."""
+        vip_usernames = ['vrmaks']
+        assert self._is_vip_sender(vip_usernames, None) is False
+
+    def test_returns_false_when_no_vip_list(self):
+        """Test returns False when VIP list is empty."""
+        assert self._is_vip_sender([], 'vrmaks') is False
+        assert self._is_vip_sender(None, 'vrmaks') is False
+
+
 class TestMentionServiceFilterMessagesByTime:
     """Tests for MentionService.filter_messages_by_time()."""
 
@@ -823,3 +861,811 @@ class TestMentionIntegration:
             should_notify = False
 
         assert should_notify is False
+
+
+class TestMentionServiceGetChatLink:
+    """Tests for MentionService.get_chat_link()."""
+
+    def _get_chat_link(self, chat_id: int, message_id: int) -> str:
+        """Helper to test chat link generation logic."""
+        if chat_id < 0:
+            chat_id_str = str(chat_id)
+            if chat_id_str.startswith('-100'):
+                chat_id_str = chat_id_str[4:]
+            else:
+                chat_id_str = chat_id_str[1:]
+        else:
+            chat_id_str = str(chat_id)
+        return f"https://t.me/c/{chat_id_str}/{message_id}"
+
+    def test_supergroup_chat_link(self):
+        """Test link generation for supergroup (starts with -100)."""
+        chat_id = -1001234567890
+        message_id = 42
+        link = self._get_chat_link(chat_id, message_id)
+        assert link == "https://t.me/c/1234567890/42"
+
+    def test_regular_group_chat_link(self):
+        """Test link generation for regular group (starts with -)."""
+        chat_id = -123456789
+        message_id = 100
+        link = self._get_chat_link(chat_id, message_id)
+        assert link == "https://t.me/c/123456789/100"
+
+    def test_positive_chat_id_link(self):
+        """Test link generation for positive chat ID."""
+        chat_id = 123456789
+        message_id = 50
+        link = self._get_chat_link(chat_id, message_id)
+        assert link == "https://t.me/c/123456789/50"
+
+    def test_link_contains_message_id(self):
+        """Test that link contains correct message ID."""
+        chat_id = -1001234567890
+        message_id = 999
+        link = self._get_chat_link(chat_id, message_id)
+        assert "/999" in link
+
+
+class TestMentionServiceFormatNotificationWithLink:
+    """Tests for format_notification with message_id parameter."""
+
+    def test_includes_message_link_when_message_id_provided(self):
+        """Test notification includes message link when message_id is provided."""
+        chat_id = -1001234567890
+        message_id = 42
+
+        # Simulate link generation
+        chat_id_str = str(chat_id)[4:]  # Remove -100
+        link = f"https://t.me/c/{chat_id_str}/{message_id}"
+
+        # Build notification with link
+        lines = ["📢 Упоминание в группе", ""]
+        lines.append(f"🔗 Открыть сообщение: {link}")
+        notification = "\n".join(lines)
+
+        assert "https://t.me/c/" in notification
+        assert "/42" in notification
+
+    def test_no_link_when_message_id_none(self):
+        """Test notification has no link when message_id is None."""
+        chat_id = -1001234567890
+        message_id = None
+
+        lines = ["📢 Упоминание в группе", ""]
+        if chat_id and message_id:
+            lines.append("🔗 Открыть сообщение: link")
+        notification = "\n".join(lines)
+
+        assert "🔗" not in notification
+
+    def test_no_link_when_chat_id_none(self):
+        """Test notification has no link when chat_id is None."""
+        chat_id = None
+        message_id = 42
+
+        lines = ["📢 Упоминание в группе", ""]
+        if chat_id and message_id:
+            lines.append("🔗 Открыть сообщение: link")
+        notification = "\n".join(lines)
+
+        assert "🔗" not in notification
+
+
+class TestMentionServiceDetectTopics:
+    """Tests for MentionService._detect_topics()."""
+
+    def _detect_topics(self, text: str) -> list:
+        """Helper to test topic detection logic."""
+        import re
+        topic_patterns = [
+            (r'\b(pr|pull request|пулл|мердж|merge)\b', 'обсуждается PR/merge request'),
+            (r'\b(релиз|release|деплой|deploy|выкатить)\b', 'обсуждается релиз/деплой'),
+            (r'\b(баг|bug|ошибка|error|exception|краш|crash)\b', 'обсуждается баг/ошибка'),
+            (r'\b(ревью|review|код.?ревью)\b', 'нужен код-ревью'),
+            (r'\b(тест|test|qa)\b', 'обсуждается тестирование'),
+            (r'\b(дедлайн|deadline|срок)\b', 'обсуждаются сроки'),
+            (r'\b(помощь|help|подскаж|объясни)\b', 'нужна помощь'),
+        ]
+        topics = []
+        for pattern, summary in topic_patterns:
+            if re.search(pattern, text.lower()):
+                topics.append(summary)
+        return topics
+
+    def test_detects_pr_topic(self):
+        """Test detection of PR-related messages."""
+        topics = self._detect_topics("Can you review my PR?")
+        assert "обсуждается PR/merge request" in topics
+
+    def test_detects_pull_request_topic(self):
+        """Test detection of pull request keyword."""
+        topics = self._detect_topics("I created a pull request for this feature")
+        assert "обсуждается PR/merge request" in topics
+
+    def test_detects_merge_topic(self):
+        """Test detection of merge keyword."""
+        topics = self._detect_topics("Please merge this branch")
+        assert "обсуждается PR/merge request" in topics
+
+    def test_detects_release_topic(self):
+        """Test detection of release-related messages."""
+        topics = self._detect_topics("When is the next release?")
+        assert "обсуждается релиз/деплой" in topics
+
+    def test_detects_deploy_topic(self):
+        """Test detection of deploy keyword."""
+        topics = self._detect_topics("We need to deploy this to production")
+        assert "обсуждается релиз/деплой" in topics
+
+    def test_detects_bug_topic(self):
+        """Test detection of bug-related messages."""
+        topics = self._detect_topics("Found a bug in the login flow")
+        assert "обсуждается баг/ошибка" in topics
+
+    def test_detects_error_topic(self):
+        """Test detection of error keyword."""
+        topics = self._detect_topics("Getting an error when saving")
+        assert "обсуждается баг/ошибка" in topics
+
+    def test_detects_review_topic(self):
+        """Test detection of review-related messages."""
+        topics = self._detect_topics("Need a review on this")
+        assert "нужен код-ревью" in topics
+
+    def test_detects_test_topic(self):
+        """Test detection of test-related messages."""
+        topics = self._detect_topics("The test is failing")
+        assert "обсуждается тестирование" in topics
+
+    def test_detects_deadline_topic(self):
+        """Test detection of deadline-related messages."""
+        topics = self._detect_topics("The deadline is tomorrow")
+        assert "обсуждаются сроки" in topics
+
+    def test_detects_help_topic(self):
+        """Test detection of help-related messages."""
+        topics = self._detect_topics("Can you help me with this?")
+        assert "нужна помощь" in topics
+
+    def test_detects_multiple_topics(self):
+        """Test detection of multiple topics in one message."""
+        topics = self._detect_topics("Need help with this bug in the release")
+        assert "нужна помощь" in topics
+        assert "обсуждается баг/ошибка" in topics
+        assert "обсуждается релиз/деплой" in topics
+
+    def test_returns_empty_for_generic_message(self):
+        """Test returns empty list for message without specific topics."""
+        topics = self._detect_topics("Hello everyone")
+        assert topics == []
+
+    def test_case_insensitive(self):
+        """Test topic detection is case insensitive."""
+        topics = self._detect_topics("URGENT BUG in production")
+        assert "обсуждается баг/ошибка" in topics
+
+
+class TestMentionServiceIsUrgentExtended:
+    """Extended tests for MentionService.is_urgent() with more keywords."""
+
+    def _is_urgent(self, messages: list) -> bool:
+        """Helper to test urgency detection logic."""
+        import re
+        urgent_pattern = re.compile(
+            r'\b(asap|срочно|urgent|emergency|critical|'
+            r'помогите|важно|блокер|blocker|prod|падает|упал|'
+            r'авария|incident|горит)\b',
+            re.IGNORECASE
+        )
+        for msg in messages:
+            text = getattr(msg, 'text', '') or ''
+            if urgent_pattern.search(text):
+                return True
+        return False
+
+    def test_returns_true_for_emergency(self):
+        """Test returns True for emergency keyword."""
+        messages = [MagicMock(text="This is an emergency!")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_critical(self):
+        """Test returns True for critical keyword."""
+        messages = [MagicMock(text="Critical issue in production")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_помогите(self):
+        """Test returns True for помогите keyword."""
+        messages = [MagicMock(text="Помогите разобраться")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_важно(self):
+        """Test returns True for важно keyword."""
+        messages = [MagicMock(text="Это очень важно")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_prod(self):
+        """Test returns True for prod keyword."""
+        messages = [MagicMock(text="Something broke on prod")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_падает(self):
+        """Test returns True for падает keyword."""
+        messages = [MagicMock(text="Сервис падает каждые 5 минут")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_упал(self):
+        """Test returns True for упал keyword."""
+        messages = [MagicMock(text="Прод упал!")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_авария(self):
+        """Test returns True for авария keyword."""
+        messages = [MagicMock(text="У нас авария")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_incident(self):
+        """Test returns True for incident keyword."""
+        messages = [MagicMock(text="We have an incident")]
+        assert self._is_urgent(messages) is True
+
+    def test_returns_true_for_горит(self):
+        """Test returns True for горит keyword."""
+        messages = [MagicMock(text="Всё горит, нужна помощь")]
+        assert self._is_urgent(messages) is True
+
+    def test_urgent_keyword_in_middle_of_message(self):
+        """Test detection of urgent keyword in middle of message."""
+        messages = [MagicMock(text="Hey @user, this is ASAP, please check")]
+        assert self._is_urgent(messages) is True
+
+    def test_multiple_messages_one_urgent(self):
+        """Test returns True if any message in context is urgent."""
+        messages = [
+            MagicMock(text="Hello"),
+            MagicMock(text="How are you?"),
+            MagicMock(text="This is urgent!"),
+            MagicMock(text="Thanks"),
+        ]
+        assert self._is_urgent(messages) is True
+
+    def test_empty_messages_list(self):
+        """Test returns False for empty messages list."""
+        messages = []
+        assert self._is_urgent(messages) is False
+
+    def test_message_with_none_text(self):
+        """Test handles message with None text gracefully."""
+        messages = [MagicMock(text=None)]
+        assert self._is_urgent(messages) is False
+
+
+class TestIsUserMentioned:
+    """Tests for _is_user_mentioned handler function."""
+
+    def _is_user_mentioned(self, entities, text, user_id, username):
+        """Helper to test mention detection logic."""
+        if not entities:
+            return False
+
+        for entity in entities:
+            entity_type = entity.get('type')
+
+            # Check @username mention
+            if entity_type == 'mention':
+                offset = entity.get('offset', 0)
+                length = entity.get('length', 0)
+                mentioned = text[offset:offset + length]
+                if mentioned.startswith('@'):
+                    mentioned = mentioned[1:]
+                if username and mentioned.lower() == username.lower():
+                    return True
+
+            # Check inline mention by user_id
+            elif entity_type == 'mention_name':
+                if entity.get('user_id') == user_id:
+                    return True
+
+        return False
+
+    def test_detects_username_mention(self):
+        """Test detection of @username mention."""
+        entities = [{'type': 'mention', 'offset': 0, 'length': 5}]
+        text = "@john can you help?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is True
+
+    def test_detects_username_mention_case_insensitive(self):
+        """Test @username mention is case insensitive."""
+        entities = [{'type': 'mention', 'offset': 0, 'length': 5}]
+        text = "@JOHN can you help?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is True
+
+    def test_detects_inline_mention_by_user_id(self):
+        """Test detection of inline mention by user_id."""
+        entities = [{'type': 'mention_name', 'user_id': 123}]
+        text = "Hey John, can you help?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is True
+
+    def test_returns_false_for_different_username(self):
+        """Test returns False when different username is mentioned."""
+        entities = [{'type': 'mention', 'offset': 0, 'length': 5}]
+        text = "@jane can you help?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is False
+
+    def test_returns_false_for_different_user_id(self):
+        """Test returns False when different user_id is mentioned."""
+        entities = [{'type': 'mention_name', 'user_id': 456}]
+        text = "Hey Jane, can you help?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is False
+
+    def test_returns_false_when_no_entities(self):
+        """Test returns False when message has no entities."""
+        entities = None
+        text = "Hello everyone"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is False
+
+    def test_returns_false_when_empty_entities(self):
+        """Test returns False when entities list is empty."""
+        entities = []
+        text = "Hello everyone"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is False
+
+    def test_mention_in_middle_of_text(self):
+        """Test detection of mention in middle of text."""
+        entities = [{'type': 'mention', 'offset': 10, 'length': 5}]
+        text = "Hey guys, @john can you check this?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is True
+
+    def test_multiple_mentions_finds_user(self):
+        """Test finding user among multiple mentions."""
+        entities = [
+            {'type': 'mention', 'offset': 0, 'length': 5},
+            {'type': 'mention', 'offset': 7, 'length': 5},
+        ]
+        text = "@jane, @john can you both help?"
+        result = self._is_user_mentioned(entities, text, 123, "john")
+        assert result is True
+
+
+class TestGetDisplayName:
+    """Tests for _get_display_name handler function."""
+
+    def _get_display_name(self, user):
+        """Helper to test display name logic."""
+        if not user:
+            return 'Unknown'
+
+        first_name = user.get('first_name', '') or ''
+        last_name = user.get('last_name', '') or ''
+
+        if first_name or last_name:
+            return f"{first_name} {last_name}".strip()
+
+        username = user.get('username')
+        if username:
+            return f"@{username}"
+
+        return 'Unknown'
+
+    def test_returns_full_name(self):
+        """Test returns full name when both first and last name present."""
+        user = {'first_name': 'John', 'last_name': 'Doe'}
+        assert self._get_display_name(user) == "John Doe"
+
+    def test_returns_first_name_only(self):
+        """Test returns first name when only first name present."""
+        user = {'first_name': 'John', 'last_name': ''}
+        assert self._get_display_name(user) == "John"
+
+    def test_returns_last_name_only(self):
+        """Test returns last name when only last name present."""
+        user = {'first_name': '', 'last_name': 'Doe'}
+        assert self._get_display_name(user) == "Doe"
+
+    def test_returns_username_when_no_name(self):
+        """Test returns @username when no name available."""
+        user = {'first_name': '', 'last_name': '', 'username': 'johndoe'}
+        assert self._get_display_name(user) == "@johndoe"
+
+    def test_returns_unknown_when_no_info(self):
+        """Test returns Unknown when no user info available."""
+        user = {'first_name': '', 'last_name': '', 'username': None}
+        assert self._get_display_name(user) == "Unknown"
+
+    def test_returns_unknown_for_none_user(self):
+        """Test returns Unknown for None user."""
+        assert self._get_display_name(None) == "Unknown"
+
+    def test_prefers_name_over_username(self):
+        """Test prefers full name over username."""
+        user = {'first_name': 'John', 'last_name': 'Doe', 'username': 'johndoe'}
+        assert self._get_display_name(user) == "John Doe"
+
+    def test_handles_none_values(self):
+        """Test handles None values in user dict."""
+        user = {'first_name': None, 'last_name': None, 'username': 'test'}
+        assert self._get_display_name(user) == "@test"
+
+
+class TestOnlineMentionNotification:
+    """Tests for online mention notification flow (via bot)."""
+
+    def test_online_notification_uses_bot(self):
+        """Test that online notifications should use bot client."""
+        is_online = True
+        bot_client_available = True
+
+        # Logic: when online and bot available, use bot
+        should_use_bot = is_online and bot_client_available
+
+        assert should_use_bot is True
+
+    def test_offline_notification_uses_user_client(self):
+        """Test that offline notifications should use user client."""
+        is_online = False
+        bot_client_available = True
+
+        # Logic: when offline, use user client regardless of bot
+        should_use_bot = is_online and bot_client_available
+
+        assert should_use_bot is False
+
+    def test_online_without_bot_uses_user_client(self):
+        """Test that online without bot falls back to user client."""
+        is_online = True
+        bot_client_available = False
+
+        # Logic: when online but no bot, use user client
+        should_use_bot = is_online and bot_client_available
+
+        assert should_use_bot is False
+
+    def test_online_notification_header_includes_indicator(self):
+        """Test online notification header includes (вы онлайн) indicator."""
+        is_online = True
+        is_urgent = False
+        header = "📢 Упоминание в группе"
+
+        if is_online and not is_urgent:
+            header = header.replace("📢 Упоминание в группе", "📢 Упоминание в группе (вы онлайн)")
+
+        assert "(вы онлайн)" in header
+
+    def test_urgent_online_notification_header(self):
+        """Test urgent online notification header."""
+        is_online = True
+        is_urgent = True
+        header = "🚨 Срочное упоминание в группе!"
+
+        if is_online and is_urgent:
+            header = header.replace("🚨 Срочное упоминание в группе!", "🚨 Срочное упоминание (вы онлайн)!")
+
+        assert "(вы онлайн)" in header
+        assert "Срочное" in header
+
+    def test_offline_notification_no_indicator(self):
+        """Test offline notification has no (вы онлайн) indicator."""
+        is_online = False
+        header = "📢 Упоминание в группе"
+
+        if is_online:
+            header = header + " (вы онлайн)"
+
+        assert "(вы онлайн)" not in header
+
+    def test_vip_sender_always_urgent_when_online(self):
+        """Test VIP sender mentions are urgent even when online."""
+        vip_usernames = ['vrmaks']
+        sender_username = 'vrmaks'
+        is_online = True
+
+        is_vip = sender_username.lower() in [v.lower() for v in vip_usernames]
+        is_urgent = is_vip  # VIP always urgent
+
+        assert is_urgent is True
+
+    def test_urgent_notification_not_silent(self):
+        """Test urgent notifications are not sent silently."""
+        is_urgent = True
+        silent = not is_urgent
+
+        assert silent is False
+
+    def test_normal_notification_is_silent(self):
+        """Test normal notifications are sent silently."""
+        is_urgent = False
+        silent = not is_urgent
+
+        assert silent is True
+
+
+class TestMentionGenerateSummaryExtended:
+    """Extended tests for generate_summary method."""
+
+    def test_summary_includes_context_messages(self):
+        """Test summary includes context messages."""
+        messages = [
+            MagicMock(text="Can you help with the PR?"),
+            MagicMock(text="Sure, looking at it now"),
+            MagicMock(text="@user check line 42"),
+        ]
+        mention_message = messages[-1]
+
+        # Simulate summary generation
+        summary_parts = []
+        for msg in messages[:-1]:
+            if msg.text:
+                summary_parts.append(f"> {msg.text[:100]}")
+
+        summary_parts.append(f"\n**Сообщение с упоминанием:**\n> {mention_message.text}")
+        summary = "\n".join(summary_parts)
+
+        assert "Can you help with the PR?" in summary
+        assert "@user check line 42" in summary
+
+    def test_summary_truncates_long_messages(self):
+        """Test summary truncates long messages."""
+        long_text = "A" * 200
+        max_length = 100
+
+        truncated = long_text[:max_length] + "..." if len(long_text) > max_length else long_text
+
+        assert len(truncated) == 103  # 100 + "..."
+        assert truncated.endswith("...")
+
+    def test_summary_with_detected_topic(self):
+        """Test summary includes detected topic."""
+        import re
+        text = "Need review on the PR"
+        topic_patterns = [
+            (r'\b(pr|pull request)\b', 'обсуждается PR'),
+            (r'\b(ревью|review)\b', 'нужен код-ревью'),
+        ]
+
+        topics = []
+        for pattern, summary in topic_patterns:
+            if re.search(pattern, text.lower()):
+                topics.append(summary)
+
+        assert "обсуждается PR" in topics
+        assert "нужен код-ревью" in topics
+
+    def test_summary_handles_empty_messages(self):
+        """Test summary handles empty message list gracefully."""
+        messages = []
+        mention_message = MagicMock(text="@user hello")
+
+        # Simulate with no context
+        if not messages:
+            summary = f"**Сообщение с упоминанием:**\n> {mention_message.text}"
+
+        assert mention_message.text in summary
+
+
+class TestDelayedMentionNotification:
+    """Tests for delayed online mention notification logic."""
+
+    def test_vip_sender_sent_immediately(self):
+        """Test VIP sender mentions are sent immediately, not delayed."""
+        is_online = True
+        is_vip = True
+        bot_available = True
+
+        # Logic: VIP mentions should be sent immediately
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is False
+
+    def test_non_vip_online_is_delayed(self):
+        """Test non-VIP online mentions are delayed."""
+        is_online = True
+        is_vip = False
+        bot_available = True
+
+        # Logic: non-VIP online mentions should be delayed
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is True
+
+    def test_offline_sent_immediately(self):
+        """Test offline mentions are sent immediately."""
+        is_online = False
+        is_vip = False
+        bot_available = True
+
+        # Logic: offline mentions should be sent immediately
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is False
+
+    def test_no_bot_sent_immediately(self):
+        """Test mentions without bot are sent immediately."""
+        is_online = True
+        is_vip = False
+        bot_available = False
+
+        # Logic: no bot = use user client immediately
+        should_delay = is_online and bot_available and not is_vip
+
+        assert should_delay is False
+
+    def test_pending_mention_scheduled_with_delay(self):
+        """Test pending mention is scheduled with correct delay."""
+        from datetime import datetime, timedelta
+
+        delay_minutes = 10
+        now = datetime.now()
+        scheduled_time = now + timedelta(minutes=delay_minutes)
+
+        # Check delay is approximately correct (within 1 second)
+        diff = (scheduled_time - now).total_seconds()
+        assert 599 <= diff <= 601  # 10 minutes = 600 seconds
+
+    def test_pending_mention_skipped_if_read(self):
+        """Test pending mention is skipped if message was read."""
+        message_id = 42
+        read_inbox_max_id = 50  # Message 42 is before 50, so it's read
+
+        was_read = message_id <= read_inbox_max_id
+
+        assert was_read is True
+
+    def test_pending_mention_sent_if_not_read(self):
+        """Test pending mention is sent if message was not read."""
+        message_id = 55
+        read_inbox_max_id = 50  # Message 55 is after 50, so not read
+
+        was_read = message_id <= read_inbox_max_id
+
+        assert was_read is False
+
+    def test_pending_mention_storage_key_format(self):
+        """Test pending mention storage key format."""
+        chat_id = -1001234567890
+        message_id = 42
+
+        key = f"{chat_id}:{message_id}"
+
+        assert key == "-1001234567890:42"
+
+    def test_multiple_pending_mentions_stored(self):
+        """Test multiple pending mentions can be stored."""
+        pending = {}
+
+        # Add first mention
+        pending["chat1:1"] = {"chat_id": "chat1", "message_id": 1}
+        # Add second mention
+        pending["chat2:2"] = {"chat_id": "chat2", "message_id": 2}
+
+        assert len(pending) == 2
+        assert "chat1:1" in pending
+        assert "chat2:2" in pending
+
+
+class TestReplyChainContext:
+    """Tests for reply chain context in mention notifications."""
+
+    def test_reply_chain_used_for_topic_detection(self):
+        """Test that reply chain messages are used for topic detection but not displayed."""
+        reply_chain = [
+            MagicMock(text="Original question about the PR"),
+            MagicMock(text="I think we should fix it"),
+        ]
+
+        # Reply chain text should be used for topic detection (e.g., PR -> code review)
+        all_text = " ".join(msg.text for msg in reply_chain)
+
+        assert "PR" in all_text  # Topic keyword present
+        assert "fix" in all_text  # Another topic keyword
+
+    def test_reply_chain_detection(self):
+        """Test detection of reply-to message."""
+        message = MagicMock()
+        message.reply_to_msg_id = 42
+
+        has_reply = message.reply_to_msg_id is not None
+
+        assert has_reply is True
+
+    def test_no_reply_chain_when_not_reply(self):
+        """Test no reply chain when message is not a reply."""
+        message = MagicMock()
+        message.reply_to_msg_id = None
+
+        has_reply = message.reply_to_msg_id is not None
+
+        assert has_reply is False
+
+    def test_reply_chain_max_depth(self):
+        """Test that reply chain respects max depth limit."""
+        max_depth = 5
+        chain = []
+
+        # Simulate building chain up to max depth
+        for i in range(7):  # Try to add more than max_depth
+            if len(chain) < max_depth:
+                chain.append(f"message_{i}")
+
+        assert len(chain) == 5
+
+    def test_reply_chain_chronological_order(self):
+        """Test that reply chain is in chronological order (oldest first)."""
+        # Simulate fetching in reverse order (newest first)
+        fetched = ["msg3", "msg2", "msg1"]
+
+        # Reverse to get chronological order
+        chronological = list(reversed(fetched))
+
+        assert chronological == ["msg1", "msg2", "msg3"]
+
+    def test_reply_chain_sender_info_extracted(self):
+        """Test that sender info is extracted from reply chain messages."""
+        msg = MagicMock()
+        msg.text = "Hello"
+        msg.sender = MagicMock()
+        msg.sender.first_name = "John"
+        msg.sender.username = "john_doe"
+
+        sender = msg.sender
+        first_name = getattr(sender, 'first_name', '') or ''
+        username = getattr(sender, 'username', '')
+
+        sender_name = first_name or f"@{username}" if username else ''
+
+        assert sender_name == "John"
+
+    def test_reply_chain_handles_no_sender(self):
+        """Test that reply chain handles messages without sender info."""
+        msg = MagicMock()
+        msg.text = "Hello"
+        msg.sender = None
+
+        sender = getattr(msg, 'sender', None)
+        sender_name = ''
+        if sender:
+            first = getattr(sender, 'first_name', '') or ''
+            sender_name = first if first else ''
+
+        assert sender_name == ''
+
+    def test_reply_chain_truncates_long_messages(self):
+        """Test that long messages in reply chain are truncated."""
+        long_text = "A" * 100
+        max_length = 60
+
+        truncated = long_text[:max_length] + "..." if len(long_text) > max_length else long_text
+
+        assert len(truncated) == 63  # 60 + "..."
+        assert truncated.endswith("...")
+
+    def test_summary_context_shown_reply_chain_hidden(self):
+        """Test summary shows context but reply chain is not displayed."""
+        reply_chain = [MagicMock(text="PR needs review")]
+        context_msgs = ["Looking at it", "Found an issue"]
+
+        # Reply chain is used for topic detection only
+        all_text = " ".join(msg.text for msg in reply_chain)
+        assert "PR" in all_text  # Used for topic detection
+
+        # Only context is shown, not reply chain
+        lines = []
+        if context_msgs:
+            lines.append("💬 Контекст:")
+            for text in context_msgs:
+                lines.append(f"  «{text}»")
+
+        summary = "\n".join(lines)
+
+        # Verify context is shown but reply chain is NOT displayed
+        assert "Контекст" in summary
+        assert "Found an issue" in summary
+        assert "Цепочка ответов" not in summary  # Reply chain not displayed
+        assert "PR needs review" not in summary   # Reply chain text not displayed

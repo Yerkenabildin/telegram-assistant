@@ -126,6 +126,8 @@ docker logs -f telegram-assistant
 | `YANDEX_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
 | `YANDEX_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
 | `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
+| `VIP_USERNAMES` | NO | `vrmaks` | Comma-separated usernames whose mentions are always urgent |
+| `ONLINE_MENTION_DELAY_MINUTES` | NO | `10` | Delay before sending online notifications (skipped if message read) |
 
 ## Event Handlers
 
@@ -292,7 +294,10 @@ Incoming private message:
 
 ## Group Mention Notifications
 
-When user is "offline" (emoji status is not work/available emoji), the bot sends notifications about mentions in group chats.
+The bot sends notifications about mentions in group chats both when user is online and offline:
+- **Offline**: Notification sent immediately via user client to PERSONAL_TG_LOGIN
+- **Online + VIP sender**: Notification sent immediately via bot (always urgent)
+- **Online + regular sender**: Notification delayed by ONLINE_MENTION_DELAY_MINUTES, skipped if message read
 
 ### Flow
 ```
@@ -301,19 +306,27 @@ Incoming group message with @mention:
 │  └─ No → Exit
 ├─ Check: Does message mention the current user?
 │  └─ No → Exit
-├─ Check: Is user "offline" (emoji status != work/available)?
-│  └─ No (user is online) → Exit
+├─ Determine online status (has work/available emoji?)
 ├─ Fetch recent messages (up to MENTION_MESSAGE_LIMIT, within MENTION_TIME_LIMIT_MINUTES)
 ├─ Generate context summary
-├─ Check urgency (keywords: ASAP, срочно, urgent, blocker, etc.)
-└─ Send notification to PERSONAL_TG_LOGIN:
-   ├─ Urgent → with sound 🚨
-   └─ Normal → silent 📢
+├─ Check urgency:
+│  ├─ VIP sender (VIP_USERNAMES) → Always urgent
+│  ├─ AI detection (if Yandex GPT configured)
+│  └─ Keyword-based detection
+└─ Send notification:
+   ├─ Offline → immediately via user client to PERSONAL_TG_LOGIN
+   ├─ Online + VIP → immediately via bot (urgent)
+   └─ Online + non-VIP → schedule with delay:
+      ├─ Wait ONLINE_MENTION_DELAY_MINUTES (default: 10)
+      ├─ Check if message was read
+      ├─ If read → skip notification
+      └─ If not read → send via bot
 ```
 
 ### Notification Format
 ```
 🚨 Срочное упоминание в группе!  (or 📢 Упоминание в группе)
+🚨 Срочное упоминание (вы онлайн)!  (when online)
 
 📍 Чат: <chat_title>
 👤 Призвал: @username (Name)
@@ -327,15 +340,20 @@ Incoming group message with @mention:
 ```
 
 ### Urgent Keywords
-Messages are considered urgent if any message in the context contains these keywords:
-- `asap`, `urgent`, `emergency`, `critical`
-- `срочно`, `помогите`, `важно`, `блокер`
-- `blocker`, `prod`, `падает`, `упал`, `авария`, `incident`, `горит`
+Messages are considered urgent if:
+1. Sender is in VIP_USERNAMES list (always urgent)
+2. AI detection marks as urgent (if Yandex GPT configured)
+3. Any message in context contains urgent keywords:
+   - `asap`, `urgent`, `emergency`, `critical`
+   - `срочно`, `помогите`, `важно`, `блокер`
+   - `blocker`, `prod`, `падает`, `упал`, `авария`, `incident`, `горит`
 
 ### Configuration
-- `AVAILABLE_EMOJI_ID` - If set, this emoji means user is "online" (no notifications)
+- `VIP_USERNAMES` - Comma-separated usernames whose mentions are always urgent (default: `vrmaks`)
+- `AVAILABLE_EMOJI_ID` - If set, this emoji means user is "online"
 - `MENTION_MESSAGE_LIMIT` - Max messages to fetch for context (default: 50)
 - `MENTION_TIME_LIMIT_MINUTES` - Max age of messages in context (default: 30)
+- `ONLINE_MENTION_DELAY_MINUTES` - Delay before sending online notifications (default: 10)
 
 Note: If a work schedule emoji is configured, having that emoji also means "online".
 

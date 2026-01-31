@@ -75,7 +75,8 @@ class MentionService:
         self,
         message_limit: int = 50,
         time_limit_minutes: int = 30,
-        available_emoji_id: Optional[int] = None
+        available_emoji_id: Optional[int] = None,
+        vip_usernames: Optional[List[str]] = None
     ):
         """
         Initialize the mention service.
@@ -84,10 +85,12 @@ class MentionService:
             message_limit: Maximum number of messages to fetch for context
             time_limit_minutes: Maximum age of messages to include in context
             available_emoji_id: Emoji ID that indicates user is "online/available"
+            vip_usernames: List of usernames whose mentions are always urgent
         """
         self.message_limit = message_limit
         self.time_limit = timedelta(minutes=time_limit_minutes)
         self.available_emoji_id = available_emoji_id
+        self.vip_usernames = [u.lower() for u in (vip_usernames or [])]
 
     def should_notify(self, emoji_status_id: Optional[int]) -> bool:
         """
@@ -133,6 +136,23 @@ class MentionService:
                 logger.debug(f"Urgent keyword found in message: {text[:50]}...")
                 return True
         return False
+
+    def is_vip_sender(self, sender_username: Optional[str]) -> bool:
+        """
+        Check if sender is a VIP whose mentions are always urgent.
+
+        Args:
+            sender_username: Username of the sender (without @)
+
+        Returns:
+            True if sender is in VIP list
+        """
+        if not sender_username or not self.vip_usernames:
+            return False
+        is_vip = sender_username.lower() in self.vip_usernames
+        if is_vip:
+            logger.debug(f"VIP sender detected: @{sender_username}")
+        return is_vip
 
     def filter_messages_by_time(
         self,
@@ -187,7 +207,8 @@ class MentionService:
         self,
         messages: List[Any],
         mention_message: Any,
-        max_context_messages: int = 5
+        max_context_messages: int = 5,
+        reply_chain: Optional[List[Any]] = None
     ) -> str:
         """
         Generate a short summary of the mention context.
@@ -199,6 +220,7 @@ class MentionService:
             messages: List of messages (newest first)
             mention_message: The message that contains the mention
             max_context_messages: Maximum messages to include in summary
+            reply_chain: Optional list of messages in reply chain (oldest first)
 
         Returns:
             Summary text
@@ -207,6 +229,13 @@ class MentionService:
 
         # Collect all text for topic detection
         all_text_parts = [mention_text]
+
+        # Add reply chain text for topic detection
+        if reply_chain:
+            for msg in reply_chain:
+                text = getattr(msg, 'text', '') or ''
+                if text.strip():
+                    all_text_parts.append(text)
 
         # Get messages before the mention for context
         context_msgs = []
@@ -240,6 +269,9 @@ class MentionService:
             lines.append("📌 Причина: общий вопрос/обсуждение")
             lines.append("")
 
+        # Note: reply_chain is used for topic detection above but not displayed
+        # in the notification to keep it concise
+
         # Add brief context (just 2 messages max for brevity)
         if context_msgs:
             lines.append("💬 Контекст:")
@@ -262,7 +294,8 @@ class MentionService:
         self,
         messages: List[Any],
         mention_message: Any,
-        chat_title: str
+        chat_title: str,
+        reply_chain: Optional[List[Any]] = None
     ) -> Tuple[str, Optional[bool]]:
         """
         Generate summary using Yandex GPT if available, otherwise fallback to keywords.
@@ -271,6 +304,7 @@ class MentionService:
             messages: List of messages (newest first)
             mention_message: The message that contains the mention
             chat_title: Title of the chat for context
+            reply_chain: Optional list of messages in reply chain (oldest first)
 
         Returns:
             Tuple of (summary text, is_urgent from AI or None to use keyword detection)
@@ -281,19 +315,33 @@ class MentionService:
 
         if gpt_service is None:
             logger.debug("Yandex GPT not configured, using keyword-based summary")
-            return self.generate_summary(messages, mention_message), None
+            return self.generate_summary(messages, mention_message, reply_chain=reply_chain), None
 
         # Prepare messages for GPT
         mention_text = getattr(mention_message, 'text', '') or ''
 
         # Get context messages (text only)
         context_texts = []
+
+        # Add reply chain first (if present)
+        if reply_chain:
+            for msg in reply_chain:
+                text = getattr(msg, 'text', '') or ''
+                if text.strip():
+                    sender = getattr(msg, 'sender', None)
+                    sender_name = ''
+                    if sender:
+                        first = getattr(sender, 'first_name', '') or ''
+                        sender_name = first if first else ''
+                    prefix = f"[{sender_name}] " if sender_name else "[reply] "
+                    context_texts.append(f"{prefix}{text}")
+
         found_mention = False
         for msg in messages:
             if msg.id == mention_message.id:
                 found_mention = True
                 continue
-            if found_mention and len(context_texts) < 5:
+            if found_mention and len(context_texts) < 8:  # Allow more with reply chain
                 text = getattr(msg, 'text', '') or ''
                 if text.strip():
                     context_texts.append(text)
@@ -316,7 +364,7 @@ class MentionService:
             logger.warning(f"Yandex GPT failed, falling back to keywords: {e}")
 
         # Fallback to keyword-based summary
-        return self.generate_summary(messages, mention_message), None
+        return self.generate_summary(messages, mention_message, reply_chain=reply_chain), None
 
     def format_notification(
         self,
@@ -325,7 +373,8 @@ class MentionService:
         sender_name: str,
         sender_username: Optional[str],
         summary: str,
-        is_urgent: bool
+        is_urgent: bool,
+        message_id: Optional[int] = None
     ) -> str:
         """
         Format the notification message.
@@ -337,6 +386,7 @@ class MentionService:
             sender_username: Username of the sender (may be None)
             summary: Generated summary of context
             is_urgent: Whether this is an urgent mention
+            message_id: ID of the mention message (for deep link)
 
         Returns:
             Formatted notification message
@@ -363,17 +413,20 @@ class MentionService:
             summary,
         ]
 
-        # Add chat link if possible
-        # Note: Private groups don't have public links
-        if chat_id:
+        # Add link to the specific message
+        if chat_id and message_id:
+            link = self.get_chat_link(chat_id, message_id)
             lines.append("")
-            lines.append(f"🔗 Открыть чат: tg://resolve?domain=c/{str(chat_id).replace('-100', '')}")
+            lines.append(f"🔗 Открыть сообщение: {link}")
 
         return "\n".join(lines)
 
     def get_chat_link(self, chat_id: int, message_id: int) -> str:
         """
         Generate a deep link to the specific message in a chat.
+
+        Uses https://t.me/c/CHAT_ID/MSG_ID format which works for
+        private groups and supergroups.
 
         Args:
             chat_id: Chat ID (may be negative for groups)
@@ -383,13 +436,14 @@ class MentionService:
             Deep link URL
         """
         # Convert supergroup/channel ID format
+        # t.me/c/ format requires chat_id without -100 prefix
         if chat_id < 0:
-            # Remove -100 prefix for supergroups
             chat_id_str = str(chat_id)
             if chat_id_str.startswith('-100'):
                 chat_id_str = chat_id_str[4:]
             else:
                 chat_id_str = chat_id_str[1:]  # Remove just the minus
-            return f"tg://privatepost?channel={chat_id_str}&post={message_id}"
         else:
-            return f"tg://privatepost?channel={chat_id}&post={message_id}"
+            chat_id_str = str(chat_id)
+
+        return f"https://t.me/c/{chat_id_str}/{message_id}"
