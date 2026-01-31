@@ -229,7 +229,7 @@ def _format_schedule_rule_fallback(s: Schedule) -> str:
 def get_schedule_keyboard():
     """Schedule management keyboard."""
     is_enabled = Schedule.is_scheduling_enabled()
-    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_text = "🟢 Включен" if is_enabled else "🔴 Выключен"
     toggle_data = b"schedule_off" if is_enabled else b"schedule_on"
 
     buttons = [
@@ -325,7 +325,7 @@ def get_mentions_keyboard():
 def get_mention_offline_keyboard():
     """Offline mention settings keyboard."""
     is_enabled = Settings.is_offline_mention_enabled()
-    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_text = "🟢 Включен" if is_enabled else "🔴 Выключен"
     toggle_data = b"offline_mention_off" if is_enabled else b"offline_mention_on"
 
     return [
@@ -338,7 +338,7 @@ def get_mention_online_keyboard():
     """Online mention settings keyboard."""
     is_enabled = Settings.is_online_mention_enabled()
     delay = Settings.get_online_mention_delay()
-    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_text = "🟢 Включен" if is_enabled else "🔴 Выключен"
     toggle_data = b"online_mention_off" if is_enabled else b"online_mention_on"
 
     if delay > 0:
@@ -407,7 +407,7 @@ def get_confirm_keyboard(action: str):
 def get_replies_keyboard():
     """Replies management keyboard."""
     is_enabled = Settings.is_autoreply_enabled()
-    toggle_text = "🔴 Выключить" if is_enabled else "🟢 Включить"
+    toggle_text = "🟢 Включен" if is_enabled else "🔴 Выключен"
     toggle_data = b"autoreply_toggle_off" if is_enabled else b"autoreply_toggle_on"
 
     return [
@@ -523,7 +523,7 @@ def register_bot_handlers(bot, user_client=None):
             return
 
         await event.respond(
-            "🤖 **Панель управления автоответчиком**\n\n"
+            "🤖 **Ваш ассистент**\n\n"
             "Выберите раздел:",
             buttons=get_main_menu_keyboard()
         )
@@ -540,7 +540,7 @@ def register_bot_handlers(bot, user_client=None):
         await _delete_schedule_list_message()
 
         await event.edit(
-            "🤖 **Панель управления автоответчиком**\n\n"
+            "🤖 **Ваш ассистент**\n\n"
             "Выберите раздел:",
             buttons=get_main_menu_keyboard()
         )
@@ -914,12 +914,8 @@ def register_bot_handlers(bot, user_client=None):
         await _delete_emoji_list_message()
         await _delete_schedule_list_message()
 
-        is_enabled = Schedule.is_scheduling_enabled()
-        status = "✅ включено" if is_enabled else "❌ выключено"
-
         text = (
-            f"📅 **Расписание эмодзи-статуса**\n\n"
-            f"Статус: {status}\n\n"
+            "📅 **Расписание эмодзи-статуса**\n\n"
             "Управление расписанием:"
         )
 
