@@ -207,7 +207,8 @@ class MentionService:
         self,
         messages: List[Any],
         mention_message: Any,
-        max_context_messages: int = 5
+        max_context_messages: int = 5,
+        reply_chain: Optional[List[Any]] = None
     ) -> str:
         """
         Generate a short summary of the mention context.
@@ -219,6 +220,7 @@ class MentionService:
             messages: List of messages (newest first)
             mention_message: The message that contains the mention
             max_context_messages: Maximum messages to include in summary
+            reply_chain: Optional list of messages in reply chain (oldest first)
 
         Returns:
             Summary text
@@ -227,6 +229,13 @@ class MentionService:
 
         # Collect all text for topic detection
         all_text_parts = [mention_text]
+
+        # Add reply chain text for topic detection
+        if reply_chain:
+            for msg in reply_chain:
+                text = getattr(msg, 'text', '') or ''
+                if text.strip():
+                    all_text_parts.append(text)
 
         # Get messages before the mention for context
         context_msgs = []
@@ -260,6 +269,24 @@ class MentionService:
             lines.append("📌 Причина: общий вопрос/обсуждение")
             lines.append("")
 
+        # Add reply chain context if present
+        if reply_chain:
+            lines.append("↩️ Цепочка ответов:")
+            for msg in reply_chain[-3:]:  # Last 3 messages in chain
+                text = getattr(msg, 'text', '') or ''
+                sender = getattr(msg, 'sender', None)
+                sender_name = ''
+                if sender:
+                    first = getattr(sender, 'first_name', '') or ''
+                    username = getattr(sender, 'username', '')
+                    sender_name = first or f"@{username}" if username else ''
+                if text.strip():
+                    if len(text) > 60:
+                        text = text[:60] + "..."
+                    prefix = f"{sender_name}: " if sender_name else ""
+                    lines.append(f"  «{prefix}{text}»")
+            lines.append("")
+
         # Add brief context (just 2 messages max for brevity)
         if context_msgs:
             lines.append("💬 Контекст:")
@@ -282,7 +309,8 @@ class MentionService:
         self,
         messages: List[Any],
         mention_message: Any,
-        chat_title: str
+        chat_title: str,
+        reply_chain: Optional[List[Any]] = None
     ) -> Tuple[str, Optional[bool]]:
         """
         Generate summary using Yandex GPT if available, otherwise fallback to keywords.
@@ -291,6 +319,7 @@ class MentionService:
             messages: List of messages (newest first)
             mention_message: The message that contains the mention
             chat_title: Title of the chat for context
+            reply_chain: Optional list of messages in reply chain (oldest first)
 
         Returns:
             Tuple of (summary text, is_urgent from AI or None to use keyword detection)
@@ -301,19 +330,33 @@ class MentionService:
 
         if gpt_service is None:
             logger.debug("Yandex GPT not configured, using keyword-based summary")
-            return self.generate_summary(messages, mention_message), None
+            return self.generate_summary(messages, mention_message, reply_chain=reply_chain), None
 
         # Prepare messages for GPT
         mention_text = getattr(mention_message, 'text', '') or ''
 
         # Get context messages (text only)
         context_texts = []
+
+        # Add reply chain first (if present)
+        if reply_chain:
+            for msg in reply_chain:
+                text = getattr(msg, 'text', '') or ''
+                if text.strip():
+                    sender = getattr(msg, 'sender', None)
+                    sender_name = ''
+                    if sender:
+                        first = getattr(sender, 'first_name', '') or ''
+                        sender_name = first if first else ''
+                    prefix = f"[{sender_name}] " if sender_name else "[reply] "
+                    context_texts.append(f"{prefix}{text}")
+
         found_mention = False
         for msg in messages:
             if msg.id == mention_message.id:
                 found_mention = True
                 continue
-            if found_mention and len(context_texts) < 5:
+            if found_mention and len(context_texts) < 8:  # Allow more with reply chain
                 text = getattr(msg, 'text', '') or ''
                 if text.strip():
                     context_texts.append(text)
@@ -336,7 +379,7 @@ class MentionService:
             logger.warning(f"Yandex GPT failed, falling back to keywords: {e}")
 
         # Fallback to keyword-based summary
-        return self.generate_summary(messages, mention_message), None
+        return self.generate_summary(messages, mention_message, reply_chain=reply_chain), None
 
     def format_notification(
         self,

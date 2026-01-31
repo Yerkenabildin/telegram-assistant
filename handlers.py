@@ -130,6 +130,54 @@ def _get_display_name(user) -> str:
     return 'Unknown'
 
 
+async def _get_reply_chain(client, chat_id: int, message, max_depth: int = 5) -> list:
+    """
+    Get the chain of reply messages leading to this message.
+
+    Walks backwards through reply_to_msg_id to build the conversation chain.
+
+    Args:
+        client: Telethon client
+        chat_id: Chat ID
+        message: Starting message (the mention message)
+        max_depth: Maximum number of messages to fetch in chain
+
+    Returns:
+        List of messages in chronological order (oldest first)
+    """
+    chain = []
+    current_msg = message
+    depth = 0
+
+    while depth < max_depth:
+        reply_to_id = getattr(current_msg, 'reply_to_msg_id', None)
+        if not reply_to_id:
+            # Also check reply_to.reply_to_msg_id for newer API
+            reply_to = getattr(current_msg, 'reply_to', None)
+            if reply_to:
+                reply_to_id = getattr(reply_to, 'reply_to_msg_id', None)
+
+        if not reply_to_id:
+            break
+
+        try:
+            # Fetch the replied-to message
+            replied_msg = await client.get_messages(chat_id, ids=reply_to_id)
+            if replied_msg:
+                chain.append(replied_msg)
+                current_msg = replied_msg
+                depth += 1
+            else:
+                break
+        except Exception as e:
+            logger.warning(f"Failed to fetch reply message {reply_to_id}: {e}")
+            break
+
+    # Reverse to get chronological order (oldest first)
+    chain.reverse()
+    return chain
+
+
 async def _is_message_read(client, chat_id: int, message_id: int) -> bool:
     """
     Check if a message in a chat has been read.
@@ -380,9 +428,19 @@ def register_handlers(client, bot=None):
             logger.warning(f"Failed to fetch messages for context: {e}")
             messages = [event.message]
 
+        # Fetch reply chain if this is a reply
+        reply_chain = []
+        if event.message.reply_to_msg_id:
+            try:
+                reply_chain = await _get_reply_chain(client, event.chat_id, event.message, max_depth=5)
+                if reply_chain:
+                    logger.debug(f"Found reply chain with {len(reply_chain)} messages")
+            except Exception as e:
+                logger.warning(f"Failed to fetch reply chain: {e}")
+
         # Generate summary (try AI first, fallback to keywords)
         summary, ai_urgency = await _mention_service.generate_summary_with_ai(
-            messages, event.message, chat_title
+            messages, event.message, chat_title, reply_chain=reply_chain
         )
 
         # Check urgency: VIP sender always urgent, then AI, then keywords

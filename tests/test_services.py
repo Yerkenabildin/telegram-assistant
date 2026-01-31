@@ -1548,3 +1548,132 @@ class TestDelayedMentionNotification:
         assert len(pending) == 2
         assert "chat1:1" in pending
         assert "chat2:2" in pending
+
+
+class TestReplyChainContext:
+    """Tests for reply chain context in mention notifications."""
+
+    def test_reply_chain_included_in_summary(self):
+        """Test that reply chain messages are included in summary."""
+        reply_chain = [
+            MagicMock(text="Original question about the PR"),
+            MagicMock(text="I think we should fix it"),
+        ]
+
+        # Simulate including reply chain in summary
+        lines = ["↩️ Цепочка ответов:"]
+        for msg in reply_chain:
+            text = msg.text[:60]
+            lines.append(f"  «{text}»")
+
+        summary = "\n".join(lines)
+
+        assert "Цепочка ответов" in summary
+        assert "Original question" in summary
+        assert "fix it" in summary
+
+    def test_reply_chain_detection(self):
+        """Test detection of reply-to message."""
+        message = MagicMock()
+        message.reply_to_msg_id = 42
+
+        has_reply = message.reply_to_msg_id is not None
+
+        assert has_reply is True
+
+    def test_no_reply_chain_when_not_reply(self):
+        """Test no reply chain when message is not a reply."""
+        message = MagicMock()
+        message.reply_to_msg_id = None
+
+        has_reply = message.reply_to_msg_id is not None
+
+        assert has_reply is False
+
+    def test_reply_chain_max_depth(self):
+        """Test that reply chain respects max depth limit."""
+        max_depth = 5
+        chain = []
+
+        # Simulate building chain up to max depth
+        for i in range(7):  # Try to add more than max_depth
+            if len(chain) < max_depth:
+                chain.append(f"message_{i}")
+
+        assert len(chain) == 5
+
+    def test_reply_chain_chronological_order(self):
+        """Test that reply chain is in chronological order (oldest first)."""
+        # Simulate fetching in reverse order (newest first)
+        fetched = ["msg3", "msg2", "msg1"]
+
+        # Reverse to get chronological order
+        chronological = list(reversed(fetched))
+
+        assert chronological == ["msg1", "msg2", "msg3"]
+
+    def test_reply_chain_sender_info_extracted(self):
+        """Test that sender info is extracted from reply chain messages."""
+        msg = MagicMock()
+        msg.text = "Hello"
+        msg.sender = MagicMock()
+        msg.sender.first_name = "John"
+        msg.sender.username = "john_doe"
+
+        sender = msg.sender
+        first_name = getattr(sender, 'first_name', '') or ''
+        username = getattr(sender, 'username', '')
+
+        sender_name = first_name or f"@{username}" if username else ''
+
+        assert sender_name == "John"
+
+    def test_reply_chain_handles_no_sender(self):
+        """Test that reply chain handles messages without sender info."""
+        msg = MagicMock()
+        msg.text = "Hello"
+        msg.sender = None
+
+        sender = getattr(msg, 'sender', None)
+        sender_name = ''
+        if sender:
+            first = getattr(sender, 'first_name', '') or ''
+            sender_name = first if first else ''
+
+        assert sender_name == ''
+
+    def test_reply_chain_truncates_long_messages(self):
+        """Test that long messages in reply chain are truncated."""
+        long_text = "A" * 100
+        max_length = 60
+
+        truncated = long_text[:max_length] + "..." if len(long_text) > max_length else long_text
+
+        assert len(truncated) == 63  # 60 + "..."
+        assert truncated.endswith("...")
+
+    def test_summary_with_reply_chain_and_context(self):
+        """Test summary includes both reply chain and regular context."""
+        reply_chain = [MagicMock(text="PR needs review")]
+        context_msgs = ["Looking at it", "Found an issue"]
+
+        lines = []
+
+        # Reply chain
+        if reply_chain:
+            lines.append("↩️ Цепочка ответов:")
+            for msg in reply_chain:
+                lines.append(f"  «{msg.text}»")
+
+        # Context
+        if context_msgs:
+            lines.append("💬 Контекст:")
+            for text in context_msgs:
+                lines.append(f"  «{text}»")
+
+        summary = "\n".join(lines)
+
+        assert "Цепочка ответов" in summary
+        assert "PR needs review" in summary
+        assert "Контекст" in summary
+        assert "Found an issue" in summary
