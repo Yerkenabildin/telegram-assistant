@@ -25,6 +25,40 @@ URGENT_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Topic detection patterns for summarization
+TOPIC_PATTERNS = [
+    # Production issues
+    (r'\b(прод|prod|production|продакшн?)\b', '🔥 Проблема с продом'),
+    (r'\b(падает|упал|crash|down|лежит|не работает|сломал|broken)\b', '💥 Что-то сломалось/упало'),
+    (r'\b(500|502|503|504|ошибк[аи]|error|exception|баг|bug)\b', '🐛 Ошибка/баг'),
+
+    # Code review
+    (r'\b(pr|пр|pull.?request|merge|мерж|ревью|review)\b', '👀 Нужно ревью кода'),
+    (r'\b(код|code|коммит|commit)\b', '💻 Вопрос по коду'),
+
+    # Help requests
+    (r'\b(помо[гщ]|help|подскаж|объясн|разбер)\b', '🆘 Нужна помощь'),
+    (r'\b(вопрос|question|спроси|узнать)\b', '❓ Есть вопрос'),
+
+    # Tasks/work
+    (r'\b(задач[аи]|task|тикет|ticket|issue|джир[ау]|jira)\b', '📋 По задаче/тикету'),
+    (r'\b(деплой|deploy|релиз|release|выкат)\b', '🚀 Деплой/релиз'),
+    (r'\b(тест|test|qa)\b', '🧪 Тестирование'),
+
+    # Meetings/communication
+    (r'\b(созвон|звонок|call|встреч|митинг|meeting)\b', '📞 Созвон/встреча'),
+    (r'\b(обсуд|discuss|поговор)\b', '💬 Нужно обсудить'),
+
+    # Access/permissions
+    (r'\b(доступ|access|права|permission|ключ|key|токен|token)\b', '🔑 Доступы/права'),
+
+    # Documentation
+    (r'\b(док[у|а]|doc|readme|инструкц)\b', '📄 Документация'),
+]
+
+# Compile topic patterns
+COMPILED_TOPICS = [(re.compile(pattern, re.IGNORECASE), summary) for pattern, summary in TOPIC_PATTERNS]
+
 
 class MentionService:
     """
@@ -132,6 +166,23 @@ class MentionService:
 
         return filtered
 
+    def _detect_topics(self, text: str) -> List[str]:
+        """
+        Detect topics from text using keyword patterns.
+
+        Args:
+            text: Text to analyze
+
+        Returns:
+            List of detected topic summaries
+        """
+        topics = []
+        for pattern, summary in COMPILED_TOPICS:
+            if pattern.search(text):
+                if summary not in topics:
+                    topics.append(summary)
+        return topics
+
     def generate_summary(
         self,
         messages: List[Any],
@@ -141,8 +192,8 @@ class MentionService:
         """
         Generate a short summary of the mention context.
 
-        Extracts the mention message and a few preceding messages
-        to provide context about why the user was mentioned.
+        Analyzes messages to detect the likely reason for mention,
+        then shows a brief context.
 
         Args:
             messages: List of messages (newest first)
@@ -152,8 +203,10 @@ class MentionService:
         Returns:
             Summary text
         """
-        # Find mention message position and get context
         mention_text = getattr(mention_message, 'text', '') or ''
+
+        # Collect all text for topic detection
+        all_text_parts = [mention_text]
 
         # Get messages before the mention for context
         context_msgs = []
@@ -167,24 +220,41 @@ class MentionService:
                 text = getattr(msg, 'text', '') or ''
                 if text.strip():
                     context_msgs.append(text)
+                    all_text_parts.append(text)
+
+        # Detect topics from all messages
+        all_text = ' '.join(all_text_parts)
+        detected_topics = self._detect_topics(all_text)
 
         # Build summary
         lines = []
 
-        # Add context messages (oldest first)
-        if context_msgs:
-            lines.append("Контекст:")
-            for text in reversed(context_msgs[-3:]):  # Last 3 context messages
-                # Truncate long messages
-                if len(text) > 100:
-                    text = text[:100] + "..."
-                lines.append(f"  > {text}")
+        # Add detected reason/topic
+        if detected_topics:
+            lines.append("📌 Вероятная причина:")
+            lines.append(f"  {detected_topics[0]}")  # Primary topic
+            if len(detected_topics) > 1:
+                lines.append(f"  (также: {', '.join(detected_topics[1:3])})")
+            lines.append("")
+        else:
+            lines.append("📌 Причина: общий вопрос/обсуждение")
+            lines.append("")
 
-        # Add the mention message
-        lines.append("\nСообщение с упоминанием:")
-        if len(mention_text) > 200:
-            mention_text = mention_text[:200] + "..."
-        lines.append(f"  {mention_text}")
+        # Add brief context (just 2 messages max for brevity)
+        if context_msgs:
+            lines.append("💬 Контекст:")
+            for text in reversed(context_msgs[-2:]):
+                # Truncate long messages
+                if len(text) > 80:
+                    text = text[:80] + "..."
+                lines.append(f"  «{text}»")
+            lines.append("")
+
+        # Add the mention message (shorter)
+        lines.append("➡️ Сообщение:")
+        if len(mention_text) > 150:
+            mention_text = mention_text[:150] + "..."
+        lines.append(f"  «{mention_text}»")
 
         return "\n".join(lines)
 
