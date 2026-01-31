@@ -67,6 +67,22 @@ class Config:
         default_factory=lambda: os.environ.get('ALLOWED_USERNAME') or None
     )
 
+    # Mention notifications settings
+    # Emoji ID that indicates user is "available/online" (won't get mention notifications)
+    available_emoji_id: Optional[int] = field(
+        default_factory=lambda: int(os.environ.get('AVAILABLE_EMOJI_ID', 0)) or None
+    )
+
+    # Maximum number of messages to fetch for context
+    mention_message_limit: int = field(
+        default_factory=lambda: int(os.environ.get('MENTION_MESSAGE_LIMIT', 50))
+    )
+
+    # Maximum age of messages to include in context (in minutes)
+    mention_time_limit_minutes: int = field(
+        default_factory=lambda: int(os.environ.get('MENTION_TIME_LIMIT_MINUTES', 30))
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
