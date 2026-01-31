@@ -269,23 +269,8 @@ class MentionService:
             lines.append("📌 Причина: общий вопрос/обсуждение")
             lines.append("")
 
-        # Add reply chain context if present
-        if reply_chain:
-            lines.append("↩️ Цепочка ответов:")
-            for msg in reply_chain[-3:]:  # Last 3 messages in chain
-                text = getattr(msg, 'text', '') or ''
-                sender = getattr(msg, 'sender', None)
-                sender_name = ''
-                if sender:
-                    first = getattr(sender, 'first_name', '') or ''
-                    username = getattr(sender, 'username', '')
-                    sender_name = first or f"@{username}" if username else ''
-                if text.strip():
-                    if len(text) > 60:
-                        text = text[:60] + "..."
-                    prefix = f"{sender_name}: " if sender_name else ""
-                    lines.append(f"  «{prefix}{text}»")
-            lines.append("")
+        # Note: reply_chain is used for topic detection above but not displayed
+        # in the notification to keep it concise
 
         # Add brief context (just 2 messages max for brevity)
         if context_msgs:

@@ -1553,24 +1553,18 @@ class TestDelayedMentionNotification:
 class TestReplyChainContext:
     """Tests for reply chain context in mention notifications."""
 
-    def test_reply_chain_included_in_summary(self):
-        """Test that reply chain messages are included in summary."""
+    def test_reply_chain_used_for_topic_detection(self):
+        """Test that reply chain messages are used for topic detection but not displayed."""
         reply_chain = [
             MagicMock(text="Original question about the PR"),
             MagicMock(text="I think we should fix it"),
         ]
 
-        # Simulate including reply chain in summary
-        lines = ["↩️ Цепочка ответов:"]
-        for msg in reply_chain:
-            text = msg.text[:60]
-            lines.append(f"  «{text}»")
+        # Reply chain text should be used for topic detection (e.g., PR -> code review)
+        all_text = " ".join(msg.text for msg in reply_chain)
 
-        summary = "\n".join(lines)
-
-        assert "Цепочка ответов" in summary
-        assert "Original question" in summary
-        assert "fix it" in summary
+        assert "PR" in all_text  # Topic keyword present
+        assert "fix" in all_text  # Another topic keyword
 
     def test_reply_chain_detection(self):
         """Test detection of reply-to message."""
@@ -1652,20 +1646,17 @@ class TestReplyChainContext:
         assert len(truncated) == 63  # 60 + "..."
         assert truncated.endswith("...")
 
-    def test_summary_with_reply_chain_and_context(self):
-        """Test summary includes both reply chain and regular context."""
+    def test_summary_context_shown_reply_chain_hidden(self):
+        """Test summary shows context but reply chain is not displayed."""
         reply_chain = [MagicMock(text="PR needs review")]
         context_msgs = ["Looking at it", "Found an issue"]
 
+        # Reply chain is used for topic detection only
+        all_text = " ".join(msg.text for msg in reply_chain)
+        assert "PR" in all_text  # Used for topic detection
+
+        # Only context is shown, not reply chain
         lines = []
-
-        # Reply chain
-        if reply_chain:
-            lines.append("↩️ Цепочка ответов:")
-            for msg in reply_chain:
-                lines.append(f"  «{msg.text}»")
-
-        # Context
         if context_msgs:
             lines.append("💬 Контекст:")
             for text in context_msgs:
@@ -1673,7 +1664,8 @@ class TestReplyChainContext:
 
         summary = "\n".join(lines)
 
-        assert "Цепочка ответов" in summary
-        assert "PR needs review" in summary
+        # Verify context is shown but reply chain is NOT displayed
         assert "Контекст" in summary
         assert "Found an issue" in summary
+        assert "Цепочка ответов" not in summary  # Reply chain not displayed
+        assert "PR needs review" not in summary   # Reply chain text not displayed
