@@ -120,6 +120,12 @@ docker logs -f telegram-assistant
 | `MEETING_API_TOKEN` | NO | - | API token for `/api/meeting` endpoint (if not set, no auth required) |
 | `BOT_TOKEN` | NO | - | Telegram bot token from @BotFather for control interface |
 | `ALLOWED_USERNAME` | NO | - | Restrict bot authentication to this username only |
+| `AVAILABLE_EMOJI_ID` | NO | - | Emoji status ID that means user is "online" (disables mention notifications) |
+| `MENTION_MESSAGE_LIMIT` | NO | `50` | Maximum messages to fetch for mention context |
+| `MENTION_TIME_LIMIT_MINUTES` | NO | `30` | Maximum age (in minutes) of messages to include in context |
+| `YANDEX_API_KEY` | NO | - | Yandex Cloud API key or IAM token for AI summarization |
+| `YANDEX_FOLDER_ID` | NO | - | Yandex Cloud folder ID (required if using Yandex GPT) |
+| `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
 
 ## Event Handlers
 
@@ -132,8 +138,9 @@ Main Telethon event handlers in `main.py`:
 | `disable_autoreply` | `/autoreply-off` | Outgoing | Settings chat | Disable bot (line 219-244) |
 | `setup_response` | `/set_for <emoji>` | Outgoing | Settings chat | Bind emoji to reply (line 247-290) |
 | `setup_response_current_status` | `/set` | Outgoing | Settings chat | Bind current status to reply (line 293-339) |
-| `asap_handler` | `.*ASAP.*` | Incoming | Private | Urgent notification (line 342-381) |
-| `new_messages` | All | Incoming | Private | Auto-reply logic (line 384-414) |
+| `asap_handler` | `.*ASAP.*` | Incoming | Private | Urgent notification |
+| `group_mention_handler` | All | Incoming | Groups | Mention notifications when offline |
+| `new_messages` | All | Incoming | Private | Auto-reply logic |
 
 ## API Routes
 
@@ -282,6 +289,74 @@ Incoming private message:
 │  └─ No → Exit
 └─ Send templated reply to sender
 ```
+
+## Group Mention Notifications
+
+When user is "offline" (emoji status is not work/available emoji), the bot sends notifications about mentions in group chats.
+
+### Flow
+```
+Incoming group message with @mention:
+├─ Check: Is this a group chat (not private)?
+│  └─ No → Exit
+├─ Check: Does message mention the current user?
+│  └─ No → Exit
+├─ Check: Is user "offline" (emoji status != work/available)?
+│  └─ No (user is online) → Exit
+├─ Fetch recent messages (up to MENTION_MESSAGE_LIMIT, within MENTION_TIME_LIMIT_MINUTES)
+├─ Generate context summary
+├─ Check urgency (keywords: ASAP, срочно, urgent, blocker, etc.)
+└─ Send notification to PERSONAL_TG_LOGIN:
+   ├─ Urgent → with sound 🚨
+   └─ Normal → silent 📢
+```
+
+### Notification Format
+```
+🚨 Срочное упоминание в группе!  (or 📢 Упоминание в группе)
+
+📍 Чат: <chat_title>
+👤 Призвал: @username (Name)
+
+Контекст:
+  > Previous message 1
+  > Previous message 2
+
+Сообщение с упоминанием:
+  @you can you help with this?
+```
+
+### Urgent Keywords
+Messages are considered urgent if any message in the context contains these keywords:
+- `asap`, `urgent`, `emergency`, `critical`
+- `срочно`, `помогите`, `важно`, `блокер`
+- `blocker`, `prod`, `падает`, `упал`, `авария`, `incident`, `горит`
+
+### Configuration
+- `AVAILABLE_EMOJI_ID` - If set, this emoji means user is "online" (no notifications)
+- `MENTION_MESSAGE_LIMIT` - Max messages to fetch for context (default: 50)
+- `MENTION_TIME_LIMIT_MINUTES` - Max age of messages in context (default: 30)
+
+Note: If a work schedule emoji is configured, having that emoji also means "online".
+
+### AI Summarization (Yandex GPT)
+
+If `YANDEX_API_KEY` and `YANDEX_FOLDER_ID` are configured, the bot uses Yandex GPT for:
+- **Smart summarization** - analyzes context and explains why user was mentioned
+- **Urgency detection** - AI determines if the situation requires immediate attention
+
+Without Yandex GPT, the bot falls back to keyword-based topic detection and urgency keywords.
+
+**Setup:**
+1. Create a service account in [Yandex Cloud Console](https://console.cloud.yandex.ru/)
+2. Get an API key or IAM token
+3. Note your folder ID
+4. Set environment variables:
+   ```
+   YANDEX_API_KEY=your-api-key-or-iam-token
+   YANDEX_FOLDER_ID=your-folder-id
+   YANDEX_GPT_MODEL=yandexgpt  # or yandexgpt-lite for faster/cheaper responses
+   ```
 
 ## Testing
 

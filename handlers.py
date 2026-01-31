@@ -15,6 +15,7 @@ from logging_config import logger
 from models import Reply
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
+from services.mention_service import MentionService
 
 # Services initialized once
 _autoreply_service = AutoReplyService(cooldown_minutes=config.autoreply_cooldown_minutes)
@@ -23,6 +24,83 @@ _notification_service = NotificationService(
     webhook_url=config.asap_webhook_url,
     webhook_timeout=config.webhook_timeout_seconds
 )
+_mention_service = MentionService(
+    message_limit=config.mention_message_limit,
+    time_limit_minutes=config.mention_time_limit_minutes,
+    available_emoji_id=config.available_emoji_id
+)
+
+
+def _is_user_mentioned(message, user_id: int, username: str = None) -> bool:
+    """
+    Check if message mentions the specified user.
+
+    Checks for:
+    - MessageEntityMention (@username)
+    - MessageEntityMentionName (inline mention with user_id)
+    - InputMessageEntityMentionName
+
+    Args:
+        message: Telethon Message object
+        user_id: User's numeric ID
+        username: User's username (without @)
+
+    Returns:
+        True if user is mentioned in the message
+    """
+    if not message.entities:
+        return False
+
+    text = message.text or ''
+
+    for entity in message.entities:
+        # Check @username mention
+        if isinstance(entity, types.MessageEntityMention):
+            # Extract the mentioned username from text
+            mentioned = text[entity.offset:entity.offset + entity.length]
+            if mentioned.startswith('@'):
+                mentioned = mentioned[1:]
+            if username and mentioned.lower() == username.lower():
+                return True
+
+        # Check inline mention by user_id
+        elif isinstance(entity, types.MessageEntityMentionName):
+            if entity.user_id == user_id:
+                return True
+
+        # Check input mention name (less common)
+        elif hasattr(types, 'InputMessageEntityMentionName'):
+            if isinstance(entity, types.InputMessageEntityMentionName):
+                if hasattr(entity, 'user_id') and entity.user_id == user_id:
+                    return True
+
+    return False
+
+
+def _get_display_name(user) -> str:
+    """
+    Get display name for a user.
+
+    Args:
+        user: Telethon User object
+
+    Returns:
+        Display name (first name + last name, or username, or 'Unknown')
+    """
+    if not user:
+        return 'Unknown'
+
+    first_name = getattr(user, 'first_name', '') or ''
+    last_name = getattr(user, 'last_name', '') or ''
+
+    if first_name or last_name:
+        return f"{first_name} {last_name}".strip()
+
+    username = getattr(user, 'username', None)
+    if username:
+        return f"@{username}"
+
+    return 'Unknown'
 
 
 def register_handlers(client):
@@ -79,6 +157,84 @@ def register_handlers(client):
             )
 
         await _send_reaction(client, event, '\U0001fae1')  # 🫡
+
+    @client.on(events.NewMessage(incoming=True))
+    async def group_mention_handler(event):
+        """Handle mentions in group chats when user is offline."""
+        # Only group chats (not private)
+        if event.is_private:
+            return
+
+        # Check if this message mentions the current user
+        me = await client.get_me()
+        if not _is_user_mentioned(event.message, me.id, me.username):
+            return
+
+        # Check if user is "offline" (not available emoji)
+        emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
+        if not _mention_service.should_notify(emoji_status_id):
+            logger.debug(f"User is online, not sending mention notification")
+            return
+
+        # Get chat info
+        chat = await event.get_chat()
+        chat_title = getattr(chat, 'title', 'Unknown chat')
+
+        # Get sender info
+        sender = await event.get_sender()
+        if getattr(sender, 'bot', False):
+            return  # Ignore bot mentions
+
+        sender_name = _get_display_name(sender)
+        sender_username = getattr(sender, 'username', None)
+
+        logger.info(f"Mention detected in '{chat_title}' from {sender_name}")
+
+        # Fetch recent messages for context
+        try:
+            messages = await client.get_messages(
+                event.chat_id,
+                limit=_mention_service.message_limit
+            )
+            # Filter by time
+            messages = _mention_service.filter_messages_by_time(messages)
+        except Exception as e:
+            logger.warning(f"Failed to fetch messages for context: {e}")
+            messages = [event.message]
+
+        # Generate summary (try AI first, fallback to keywords)
+        summary, ai_urgency = await _mention_service.generate_summary_with_ai(
+            messages, event.message, chat_title
+        )
+
+        # Check urgency: use AI detection if available, otherwise keyword-based
+        if ai_urgency is not None:
+            is_urgent = ai_urgency
+            logger.debug(f"Urgency from AI: {is_urgent}")
+        else:
+            is_urgent = _mention_service.is_urgent(messages)
+            logger.debug(f"Urgency from keywords: {is_urgent}")
+
+        # Format notification
+        notification = _mention_service.format_notification(
+            chat_title=chat_title,
+            chat_id=event.chat_id,
+            sender_name=sender_name,
+            sender_username=sender_username,
+            summary=summary,
+            is_urgent=is_urgent
+        )
+
+        # Send notification (silent if not urgent)
+        try:
+            await client.send_message(
+                config.personal_tg_login,
+                notification,
+                silent=not is_urgent  # Silent notification if not urgent
+            )
+            logger.info(f"Mention notification sent (urgent={is_urgent})")
+        except Exception as e:
+            logger.error(f"Failed to send mention notification: {e}")
 
     @client.on(events.NewMessage(incoming=True))
     async def new_messages(event):

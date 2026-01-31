@@ -67,6 +67,38 @@ class Config:
         default_factory=lambda: os.environ.get('ALLOWED_USERNAME') or None
     )
 
+    # Mention notifications settings
+    # Emoji ID that indicates user is "available/online" (won't get mention notifications)
+    available_emoji_id: Optional[int] = field(
+        default_factory=lambda: int(os.environ.get('AVAILABLE_EMOJI_ID', 0)) or None
+    )
+
+    # Maximum number of messages to fetch for context
+    mention_message_limit: int = field(
+        default_factory=lambda: int(os.environ.get('MENTION_MESSAGE_LIMIT', 50))
+    )
+
+    # Maximum age of messages to include in context (in minutes)
+    mention_time_limit_minutes: int = field(
+        default_factory=lambda: int(os.environ.get('MENTION_TIME_LIMIT_MINUTES', 30))
+    )
+
+    # Yandex GPT settings for AI-powered summarization
+    # Get API key from https://console.cloud.yandex.ru/
+    yandex_api_key: Optional[str] = field(
+        default_factory=lambda: os.environ.get('YANDEX_API_KEY') or None
+    )
+
+    # Yandex Cloud folder ID (required for Yandex GPT)
+    yandex_folder_id: Optional[str] = field(
+        default_factory=lambda: os.environ.get('YANDEX_FOLDER_ID') or None
+    )
+
+    # Yandex GPT model (default: yandexgpt for quality, or yandexgpt-lite for speed)
+    yandex_gpt_model: str = field(
+        default_factory=lambda: os.environ.get('YANDEX_GPT_MODEL', 'yandexgpt')
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
