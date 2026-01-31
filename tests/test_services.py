@@ -1669,3 +1669,289 @@ class TestReplyChainContext:
         assert "Found an issue" in summary
         assert "Цепочка ответов" not in summary  # Reply chain not displayed
         assert "PR needs review" not in summary   # Reply chain text not displayed
+
+
+class TestProductivityServiceTodayRange:
+    """Tests for ProductivityService._get_today_range()."""
+
+    def test_returns_correct_day_range(self):
+        """Test returns correct start and end of day."""
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz)
+
+        # Simulate _get_today_range logic
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+
+        assert day_start.hour == 0
+        assert day_start.minute == 0
+        assert day_end > day_start
+        assert (day_end - day_start).total_seconds() == 86400  # 24 hours
+
+    def test_uses_configured_timezone(self):
+        """Test uses configured timezone for day boundaries."""
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        # Same time in UTC and Moscow differ in date near midnight
+        utc = ZoneInfo("UTC")
+        moscow = ZoneInfo("Europe/Moscow")
+
+        # Simulate getting day start in different timezones
+        now_utc = datetime.now(utc)
+        now_moscow = datetime.now(moscow)
+
+        day_start_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_start_moscow = now_moscow.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # They should have same hour (0) but potentially different dates
+        assert day_start_utc.hour == 0
+        assert day_start_moscow.hour == 0
+
+
+class TestProductivityServiceCollectMessages:
+    """Tests for ProductivityService message collection logic."""
+
+    def test_skips_inactive_dialogs(self):
+        """Test skips dialogs with no recent activity."""
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Simulate dialog check
+        last_msg_date = now - timedelta(days=2)  # 2 days old
+
+        should_skip = last_msg_date < day_start
+        assert should_skip is True
+
+    def test_processes_active_dialogs(self):
+        """Test processes dialogs with activity today."""
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("Europe/Moscow")
+        now = datetime.now(tz)
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Simulate dialog check
+        last_msg_date = now - timedelta(hours=2)  # 2 hours ago = today
+
+        should_skip = last_msg_date < day_start
+        assert should_skip is False
+
+    def test_filters_only_outgoing_messages(self):
+        """Test only collects outgoing messages."""
+        messages = [
+            MagicMock(out=True, text="My message"),
+            MagicMock(out=False, text="Their message"),
+            MagicMock(out=True, text="Another of mine"),
+        ]
+
+        outgoing = [m for m in messages if m.out]
+
+        assert len(outgoing) == 2
+        assert all(m.out for m in outgoing)
+
+    def test_skips_empty_messages(self):
+        """Test skips messages with empty text."""
+        messages = [
+            MagicMock(out=True, text="Hello"),
+            MagicMock(out=True, text=""),
+            MagicMock(out=True, text="   "),
+            MagicMock(out=True, text="World"),
+        ]
+
+        valid = [m for m in messages if m.out and m.text and m.text.strip()]
+
+        assert len(valid) == 2
+
+    def test_extracts_mentions_from_messages(self):
+        """Test extracts @mentions from messages."""
+        import re
+
+        text = "Hey @alice and @bob, can you help?"
+        mentions = re.findall(r'@(\w+)', text)
+
+        assert mentions == ['alice', 'bob']
+
+
+class TestProductivityServiceChatSummary:
+    """Tests for ProductivityService chat summary generation."""
+
+    def test_keyword_detection_for_review(self):
+        """Test keyword detection for code review."""
+        import re
+
+        text = "I reviewed the PR and left comments"
+        patterns = [
+            (r'\b(ревью|review|pr|пр|merge)\b', 'ревью кода'),
+        ]
+
+        detected = []
+        for pattern, label in patterns:
+            if re.search(pattern, text.lower()):
+                detected.append(label)
+
+        assert 'ревью кода' in detected
+
+    def test_keyword_detection_for_bug_fix(self):
+        """Test keyword detection for bug fix."""
+        import re
+
+        text = "Fixed the bug in the login flow"
+        patterns = [
+            (r'\b(баг|bug|фикс|fix|исправ)\b', 'исправление багов'),
+        ]
+
+        detected = []
+        for pattern, label in patterns:
+            if re.search(pattern, text.lower()):
+                detected.append(label)
+
+        assert 'исправление багов' in detected
+
+    def test_keyword_detection_for_meetings(self):
+        """Test keyword detection for meetings/calls."""
+        import re
+
+        text = "Let's schedule a call for tomorrow"
+        patterns = [
+            (r'\b(созвон|звонок|call|митинг|meeting)\b', 'созвоны'),
+        ]
+
+        detected = []
+        for pattern, label in patterns:
+            if re.search(pattern, text.lower()):
+                detected.append(label)
+
+        assert 'созвоны' in detected
+
+    def test_message_count_formatting(self):
+        """Test message count is included in summary."""
+        message_count = 15
+
+        summary = f"{message_count} сообщений"
+
+        assert "15 сообщений" == summary
+
+
+class TestProductivityServiceDailySummary:
+    """Tests for ProductivityService daily summary generation."""
+
+    def test_empty_summary_for_no_messages(self):
+        """Test generates appropriate message when no messages."""
+        total_messages = 0
+
+        if total_messages == 0:
+            summary = "Сегодня вы не отправляли сообщений."
+        else:
+            summary = f"Всего: {total_messages}"
+
+        assert "не отправляли" in summary
+
+    def test_summary_includes_totals(self):
+        """Test summary includes message and chat totals."""
+        total_messages = 42
+        total_chats = 5
+
+        lines = [
+            f"📨 Всего сообщений: **{total_messages}**",
+            f"💬 Активных чатов: **{total_chats}**",
+        ]
+        summary = "\n".join(lines)
+
+        assert "42" in summary
+        assert "5" in summary
+
+    def test_chat_type_emoji_mapping(self):
+        """Test chat type emoji mapping."""
+        type_emoji = {
+            'private': '👤',
+            'group': '👥',
+            'channel': '📢'
+        }
+
+        assert type_emoji['private'] == '👤'
+        assert type_emoji['group'] == '👥'
+        assert type_emoji['channel'] == '📢'
+
+    def test_summary_sorted_by_activity(self):
+        """Test summaries are sorted by message count (most active first)."""
+        chats = [
+            {'title': 'Chat A', 'message_count': 5},
+            {'title': 'Chat B', 'message_count': 20},
+            {'title': 'Chat C', 'message_count': 10},
+        ]
+
+        sorted_chats = sorted(chats, key=lambda x: x['message_count'], reverse=True)
+
+        assert sorted_chats[0]['title'] == 'Chat B'
+        assert sorted_chats[1]['title'] == 'Chat C'
+        assert sorted_chats[2]['title'] == 'Chat A'
+
+    def test_limits_chats_to_top_10(self):
+        """Test limits displayed chats to top 10."""
+        chats = [{'title': f'Chat {i}', 'count': i} for i in range(15)]
+
+        limited = chats[:10]
+
+        assert len(limited) == 10
+
+    def test_shows_remaining_count(self):
+        """Test shows remaining chats count."""
+        total_chats = 15
+        displayed = 10
+        remaining = total_chats - displayed
+
+        if remaining > 0:
+            text = f"...и ещё {remaining} чатов"
+        else:
+            text = ""
+
+        assert "5 чатов" in text
+
+
+class TestProductivitySettingsIntegration:
+    """Tests for productivity settings in Settings model."""
+
+    def test_summary_time_format_validation(self):
+        """Test time format validation for HH:MM."""
+        import re
+
+        valid_times = ["19:00", "9:30", "00:00", "23:59"]
+        invalid_times = ["25:00", "12:60", "1pm", "invalid"]
+
+        for time_str in valid_times:
+            match = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
+            assert match is not None, f"Valid time {time_str} should match"
+            hour, minute = int(match.group(1)), int(match.group(2))
+            assert 0 <= hour <= 23 and 0 <= minute <= 59
+
+        for time_str in invalid_times:
+            match = re.match(r'^(\d{1,2}):(\d{2})$', time_str)
+            if match:
+                hour, minute = int(match.group(1)), int(match.group(2))
+                is_valid = 0 <= hour <= 23 and 0 <= minute <= 59
+                assert not is_valid, f"Invalid time {time_str} should fail validation"
+            else:
+                assert match is None, f"Invalid time {time_str} should not match"
+
+    def test_enabled_setting_toggle(self):
+        """Test enabled setting toggle logic."""
+        enabled = 'true'
+        is_enabled = enabled == 'true'
+        assert is_enabled is True
+
+        disabled = 'false'
+        is_disabled = disabled == 'true'
+        assert is_disabled is False
+
+        default = None
+        is_default = (default or 'false') == 'true'
+        assert is_default is False

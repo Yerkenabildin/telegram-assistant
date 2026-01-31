@@ -180,6 +180,90 @@ async def schedule_checker():
 
 
 # =============================================================================
+# Productivity Summary Scheduler
+# =============================================================================
+
+async def productivity_summary_scheduler():
+    """Background task that sends daily productivity summary at configured time."""
+    from zoneinfo import ZoneInfo
+    from services.productivity_service import get_productivity_service
+    from services.yandex_gpt_service import get_yandex_gpt_service
+
+    logger.info("Starting productivity summary scheduler...")
+
+    # Wait for client to be authorized
+    while not await client.is_user_authorized():
+        await asyncio.sleep(5)
+
+    logger.info("Productivity summary scheduler active")
+
+    last_sent_date = None
+    tz = ZoneInfo(config.timezone)
+
+    while True:
+        try:
+            await asyncio.sleep(60)  # Check every minute
+
+            # Check if feature is enabled
+            if not Settings.is_productivity_summary_enabled():
+                continue
+
+            # Get configured time
+            summary_time = Settings.get_productivity_summary_time()
+            if not summary_time:
+                continue
+
+            # Parse time
+            try:
+                hour, minute = map(int, summary_time.split(':'))
+            except (ValueError, AttributeError):
+                continue
+
+            # Get current time in configured timezone
+            from datetime import datetime
+            now = datetime.now(tz)
+
+            # Check if it's time to send (within the same minute)
+            if now.hour == hour and now.minute == minute:
+                # Prevent duplicate sends on the same day
+                today = now.date()
+                if last_sent_date == today:
+                    continue
+
+                last_sent_date = today
+                logger.info("Generating daily productivity summary...")
+
+                try:
+                    # Generate summary
+                    service = get_productivity_service()
+                    gpt_service = get_yandex_gpt_service()
+
+                    daily = await service.collect_daily_messages(client)
+                    summary_text = await service.generate_daily_summary(daily, gpt_service)
+
+                    # Send via bot if available, otherwise via user client
+                    if bot and await bot.is_user_authorized():
+                        from bot_handlers import get_owner_id
+                        owner_id = get_owner_id()
+                        if owner_id:
+                            await bot.send_message(owner_id, summary_text)
+                            logger.info("Daily productivity summary sent via bot")
+                    else:
+                        await client.send_message(config.personal_tg_login, summary_text)
+                        logger.info("Daily productivity summary sent via user client")
+
+                except Exception as e:
+                    logger.error(f"Failed to generate/send productivity summary: {e}")
+
+        except asyncio.CancelledError:
+            logger.info("Productivity summary scheduler stopped")
+            break
+        except Exception as e:
+            logger.error(f"Productivity summary scheduler error: {e}")
+            await asyncio.sleep(60)
+
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -205,6 +289,9 @@ async def run_telethon():
 
     # Start schedule checker as a background task
     asyncio.create_task(schedule_checker())
+
+    # Start productivity summary scheduler
+    asyncio.create_task(productivity_summary_scheduler())
 
     # Start background task to detect when auth is complete
     asyncio.create_task(_wait_for_auth())

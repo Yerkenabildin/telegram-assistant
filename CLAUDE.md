@@ -66,6 +66,7 @@ The application runs up to three async services concurrently via `asyncio.gather
 | `services/context_extraction_service.py` | Anchor-based context extraction for mentions |
 | `services/mention_service.py` | Mention notification logic and formatting |
 | `services/yandex_gpt_service.py` | AI summarization with chunking support |
+| `services/productivity_service.py` | Daily productivity summary collection and generation |
 | `./storage/` | Persistent data directory (session file, database) |
 
 ### Module Dependencies
@@ -144,6 +145,7 @@ docker logs -f telegram-assistant
 | `YANDEX_GPT_MODEL` | NO | `yandexgpt` | Model name (`yandexgpt` for quality, `yandexgpt-lite` for speed) |
 | `VIP_USERNAMES` | NO | - | Comma-separated usernames whose mentions are always urgent |
 | `ONLINE_MENTION_DELAY_MINUTES` | NO | `10` | Delay before sending online notifications (skipped if message read) |
+| `PRODUCTIVITY_SUMMARY_TIME` | NO | - | Time for daily productivity summary (HH:MM format, e.g., `19:00`) |
 
 ## Event Handlers
 
@@ -420,6 +422,65 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
    YANDEX_FOLDER_ID=your-folder-id
    YANDEX_GPT_MODEL=yandexgpt  # or yandexgpt-lite for faster/cheaper responses
    ```
+
+## Daily Productivity Summary
+
+The bot can generate daily productivity summaries analyzing all your outgoing messages.
+
+### Features
+- **Message collection**: Efficiently scans dialogs and collects only YOUR outgoing messages
+- **Per-chat summaries**: Generates brief summary for each chat (what you discussed)
+- **Overall insights**: AI-generated highlights of your day (if Yandex GPT configured)
+- **Keyword detection**: Falls back to keyword-based summaries without AI
+
+### Flow
+```
+End of day (configured time):
+├─ Iterate through dialogs with today's activity
+├─ For each dialog, fetch outgoing messages (from_user=me filter)
+├─ Skip dialogs with no outgoing messages
+├─ Group by chat and generate per-chat summary
+├─ Generate overall daily insights (AI or keyword-based)
+└─ Send summary via bot (preferred) or user client
+```
+
+### Configuration
+
+**Via Bot Interface:**
+1. Open bot menu → 📊 Продуктивность
+2. Set time for daily summary (e.g., 19:00)
+3. Enable automatic sending
+
+**Settings:**
+- `PRODUCTIVITY_SUMMARY_TIME` (env var) - Time for daily summary (HH:MM format)
+- Database settings:
+  - `productivity_summary_enabled` - Enable/disable automatic sending
+  - `productivity_summary_time` - Time for daily summary
+
+### Output Format
+```
+📊 **Продуктивность за 31.01.2026**
+
+📨 Всего сообщений: **42**
+💬 Активных чатов: **5**
+
+**Главное за день:**
+- Обсудил архитектуру с командой backend
+- Провёл ревью 3 PR
+- Помог коллегам с вопросами по API
+
+**По чатам:**
+👥 **Backend Team** (15 сообщ.)
+   └ Обсуждал: ревью кода, деплой
+👤 **Вася Пупкин** (10 сообщ.)
+   └ Помогал с настройкой окружения
+...
+```
+
+### Key Files
+- `services/productivity_service.py` - Core service for message collection and summarization
+- `bot_handlers.py` - Bot interface for productivity menu
+- `main.py` - Background scheduler for automatic sending
 
 ## Testing
 

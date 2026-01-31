@@ -277,6 +277,44 @@ class Settings(Model):
         """Set delay in minutes before sending online mention notifications."""
         Settings.set('online_mention_delay', str(minutes))
 
+    # =========================================================================
+    # Productivity Summary Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_productivity_summary_enabled() -> bool:
+        """Check if daily productivity summary is enabled (default: False)."""
+        value = Settings.get('productivity_summary_enabled')
+        return value == 'true'
+
+    @staticmethod
+    def set_productivity_summary_enabled(enabled: bool) -> None:
+        """Enable or disable daily productivity summary."""
+        Settings.set('productivity_summary_enabled', 'true' if enabled else 'false')
+
+    @staticmethod
+    def get_productivity_summary_time() -> Optional[str]:
+        """Get time for daily productivity summary (HH:MM format).
+
+        Returns:
+            Time string like "19:00" or None if not set
+        """
+        return Settings.get('productivity_summary_time')
+
+    @staticmethod
+    def set_productivity_summary_time(time_str: Optional[str]) -> None:
+        """Set time for daily productivity summary.
+
+        Args:
+            time_str: Time in HH:MM format, or None to clear
+        """
+        if time_str is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'productivity_summary_time'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('productivity_summary_time', time_str)
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""

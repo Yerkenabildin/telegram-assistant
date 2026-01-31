@@ -114,6 +114,12 @@ class Config:
         default_factory=lambda: int(os.environ.get('ONLINE_MENTION_DELAY_MINUTES', '10'))
     )
 
+    # Daily productivity summary settings
+    # Time to send daily summary (HH:MM format, e.g., "19:00")
+    productivity_summary_time: Optional[str] = field(
+        default_factory=lambda: os.environ.get('PRODUCTIVITY_SUMMARY_TIME') or None
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []
