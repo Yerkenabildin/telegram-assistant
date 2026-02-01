@@ -352,6 +352,40 @@ class Settings(Model):
             return True
         return False
 
+    @staticmethod
+    def get_productivity_temp_chats() -> List[int]:
+        """Get list of temporary chat IDs for productivity summary.
+
+        These are chats added automatically when user is mentioned/replied to.
+        They are cleared after summary generation.
+
+        Returns:
+            List of chat IDs
+        """
+        value = Settings.get('productivity_temp_chats')
+        if not value:
+            return []
+        try:
+            return [int(x) for x in value.split(',') if x.strip()]
+        except ValueError:
+            return []
+
+    @staticmethod
+    def add_productivity_temp_chat(chat_id: int) -> None:
+        """Add a chat to the temporary chats list for productivity summary.
+
+        Called when user is mentioned or replied to in a group.
+        """
+        chats = Settings.get_productivity_temp_chats()
+        if chat_id not in chats:
+            chats.append(chat_id)
+            Settings.set('productivity_temp_chats', ','.join(str(c) for c in chats))
+
+    @staticmethod
+    def clear_productivity_temp_chats() -> None:
+        """Clear all temporary chats after summary generation."""
+        Settings.set('productivity_temp_chats', '')
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""

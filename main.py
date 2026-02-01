@@ -239,12 +239,20 @@ async def productivity_summary_scheduler():
                     gpt_service = get_yandex_gpt_service()
 
                     # Get extra chat IDs for muted chats user wants to include
+                    # Combine permanent extra chats + temporary chats (from mentions/replies)
                     extra_chat_ids = Settings.get_productivity_extra_chats()
+                    temp_chat_ids = Settings.get_productivity_temp_chats()
+                    all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
 
                     daily = await service.collect_daily_messages(
-                        client, extra_chat_ids=extra_chat_ids
+                        client, extra_chat_ids=all_extra_chats
                     )
                     summary_text = await service.generate_daily_summary(daily, gpt_service)
+
+                    # Clear temporary chats after summary is generated
+                    Settings.clear_productivity_temp_chats()
+                    if temp_chat_ids:
+                        logger.info(f"Cleared {len(temp_chat_ids)} temporary productivity chats")
 
                     # Send via bot if available, otherwise via user client
                     if bot and await bot.is_user_authorized():

@@ -2630,13 +2630,21 @@ def register_bot_handlers(bot, user_client=None):
             gpt_service = get_yandex_gpt_service()
 
             # Get extra chat IDs for muted chats user wants to include
+            # Combine permanent extra chats + temporary chats (from mentions/replies)
             extra_chat_ids = Settings.get_productivity_extra_chats()
+            temp_chat_ids = Settings.get_productivity_temp_chats()
+            all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
 
             # Collect messages (this may take a while)
             daily = await service.collect_daily_messages(
-                _user_client, extra_chat_ids=extra_chat_ids
+                _user_client, extra_chat_ids=all_extra_chats
             )
             summary_text = await service.generate_daily_summary(daily, gpt_service)
+
+            # Clear temporary chats after summary is generated
+            Settings.clear_productivity_temp_chats()
+            if temp_chat_ids:
+                logger.info(f"Cleared {len(temp_chat_ids)} temporary productivity chats")
 
             # Send as a new message
             await event.respond(summary_text)
