@@ -6,20 +6,35 @@ Tests ContextExtractionService for anchor-based context extraction.
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from typing import List, Optional, Any, Tuple
 from unittest.mock import MagicMock, AsyncMock, patch
+from dataclasses import dataclass
 
 import pytest
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
-from services.context_extraction_service import (
-    ContextExtractionService,
-    ContextMessage,
-    ExtractedContext,
-    DEFAULT_CONTEXT_BEFORE_MINUTES,
-    DEFAULT_FALLBACK_CONTEXT_MINUTES,
+# Import directly from the module file to avoid services/__init__.py chain
+import importlib.util
+spec = importlib.util.spec_from_file_location(
+    "context_extraction_service",
+    os.path.join(project_root, "services", "context_extraction_service.py")
 )
+context_extraction_module = importlib.util.module_from_spec(spec)
+
+# Mock logging before loading the module
+sys.modules['logging_config'] = MagicMock()
+sys.modules['logging_config'].get_logger = MagicMock(return_value=MagicMock())
+
+spec.loader.exec_module(context_extraction_module)
+
+ContextExtractionService = context_extraction_module.ContextExtractionService
+ContextMessage = context_extraction_module.ContextMessage
+ExtractedContext = context_extraction_module.ExtractedContext
+DEFAULT_CONTEXT_BEFORE_MINUTES = context_extraction_module.DEFAULT_CONTEXT_BEFORE_MINUTES
+DEFAULT_FALLBACK_CONTEXT_MINUTES = context_extraction_module.DEFAULT_FALLBACK_CONTEXT_MINUTES
 
 
 class TestContextExtractionServiceInit:
@@ -776,7 +791,8 @@ class TestServiceSingleton:
 
     def test_returns_service_instance(self):
         """Test singleton returns service instance."""
-        from services.context_extraction_service import get_context_extraction_service
+        # Use the already imported module to avoid services/__init__.py
+        get_context_extraction_service = context_extraction_module.get_context_extraction_service
 
         service = get_context_extraction_service()
         assert service is not None
@@ -784,7 +800,8 @@ class TestServiceSingleton:
 
     def test_returns_same_instance(self):
         """Test singleton returns same instance."""
-        from services.context_extraction_service import get_context_extraction_service
+        # Use the already imported module to avoid services/__init__.py
+        get_context_extraction_service = context_extraction_module.get_context_extraction_service
 
         service1 = get_context_extraction_service()
         service2 = get_context_extraction_service()
