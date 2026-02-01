@@ -282,11 +282,15 @@ async def productivity_summary_scheduler():
 # =============================================================================
 
 async def calendar_checker():
-    """Background task that monitors CalDAV calendar for meetings.
+    """Background task that monitors CalDAV calendar for meetings and absences.
 
     Configuration is stored in Settings and can be changed at runtime via bot.
-    Uses meeting_emoji_id (same as Meeting API) for the meeting status.
+    Supports two event types:
+    - Meeting: Uses meeting_emoji_id, priority 50
+    - Absence: Uses absence_emoji_id, priority 75 (higher than meeting)
     """
+    from services.caldav_service import CalendarEventType
+
     logger.info("Starting calendar checker...")
 
     # Wait for client to be authorized
@@ -295,8 +299,8 @@ async def calendar_checker():
 
     logger.info("Calendar checker active")
 
-    # Track if we started a meeting from calendar
-    calendar_meeting_active = False
+    # Track current calendar state: None, 'meeting', or 'absence'
+    current_calendar_state = None
 
     while True:
         try:
@@ -304,10 +308,13 @@ async def calendar_checker():
 
             # Check if CalDAV is configured and calendar sync is enabled
             if not Settings.is_caldav_configured() or not Settings.is_calendar_sync_enabled():
-                if calendar_meeting_active:
-                    # End meeting if we started it and sync got disabled
-                    logger.info("Calendar sync disabled, ending calendar-triggered meeting")
-                    Schedule.end_meeting()
+                if current_calendar_state:
+                    # End any active calendar event if sync got disabled
+                    logger.info("Calendar sync disabled, ending calendar-triggered status")
+                    if current_calendar_state == 'meeting':
+                        Schedule.end_meeting()
+                    elif current_calendar_state == 'absence':
+                        Schedule.end_absence()
                     # Restore scheduled emoji
                     scheduled_emoji_id = Schedule.get_current_emoji_id()
                     if scheduled_emoji_id:
@@ -317,58 +324,91 @@ async def calendar_checker():
                             ))
                         except Exception as e:
                             logger.error(f"Failed to restore emoji status: {e}")
-                    calendar_meeting_active = False
+                    current_calendar_state = None
                 continue
 
-            # Get emoji to use for meetings (same as Meeting API)
+            # Get emoji for both types
             meeting_emoji = Settings.get('meeting_emoji_id')
-            if not meeting_emoji:
-                # No meeting emoji configured - skip
-                continue
+            absence_emoji = Settings.get_absence_emoji_id()
 
-            # Check for active meeting
-            is_meeting, event = await caldav_service.check_meeting_status()
-            logger.debug(f"Calendar check: is_meeting={is_meeting}, active_flag={calendar_meeting_active}")
+            # Check for active calendar event with priority (absence > meeting)
+            event_type, event = await caldav_service.check_calendar_status_with_priority()
+            logger.debug(
+                f"Calendar check: type={event_type.value if event_type else None}, "
+                f"current_state={current_calendar_state}"
+            )
 
-            if is_meeting and not calendar_meeting_active:
-                # Meeting started - activate meeting status
-                logger.info(f"Calendar event started: {event.summary}")
-                Schedule.start_meeting(meeting_emoji)
+            # Determine target state based on event type and available emoji
+            target_state = None
+            target_emoji = None
 
-                # Update emoji status immediately
-                try:
-                    await client(UpdateEmojiStatusRequest(
-                        emoji_status=EmojiStatus(document_id=int(meeting_emoji))
-                    ))
-                    logger.info(f"Meeting status activated for: {event.summary}")
-                except Exception as e:
-                    logger.error(f"Failed to update emoji status: {e}")
+            if event_type == CalendarEventType.ABSENCE and absence_emoji:
+                target_state = 'absence'
+                target_emoji = absence_emoji
+            elif event_type == CalendarEventType.MEETING and meeting_emoji:
+                target_state = 'meeting'
+                target_emoji = meeting_emoji
+            elif event_type == CalendarEventType.ABSENCE and not absence_emoji and meeting_emoji:
+                # Fallback: absence event but no absence emoji - use meeting emoji
+                target_state = 'absence'
+                target_emoji = meeting_emoji
+                logger.debug("Using meeting emoji for absence (absence emoji not configured)")
 
-                calendar_meeting_active = True
+            # Handle state transitions
+            if target_state != current_calendar_state:
+                # End previous state if any
+                if current_calendar_state == 'meeting':
+                    Schedule.end_meeting()
+                    logger.info("Ending calendar meeting")
+                elif current_calendar_state == 'absence':
+                    Schedule.end_absence()
+                    logger.info("Ending calendar absence")
 
-            elif not is_meeting and calendar_meeting_active:
-                # Meeting ended - restore scheduled emoji
-                logger.info("Calendar event ended, restoring schedule")
-                Schedule.end_meeting()
-
-                # Get and apply scheduled emoji
-                scheduled_emoji_id = Schedule.get_current_emoji_id()
-                if scheduled_emoji_id:
+                # Start new state if any
+                if target_state == 'absence':
+                    logger.info(f"Calendar absence started: {event.summary}")
+                    Schedule.start_absence(target_emoji)
                     try:
                         await client(UpdateEmojiStatusRequest(
-                            emoji_status=EmojiStatus(document_id=scheduled_emoji_id)
+                            emoji_status=EmojiStatus(document_id=int(target_emoji))
                         ))
-                        logger.info(f"Restored scheduled emoji: {scheduled_emoji_id}")
+                        logger.info(f"Absence status activated for: {event.summary}")
                     except Exception as e:
-                        logger.error(f"Failed to restore emoji status: {e}")
+                        logger.error(f"Failed to update emoji status: {e}")
 
-                calendar_meeting_active = False
+                elif target_state == 'meeting':
+                    logger.info(f"Calendar meeting started: {event.summary}")
+                    Schedule.start_meeting(target_emoji)
+                    try:
+                        await client(UpdateEmojiStatusRequest(
+                            emoji_status=EmojiStatus(document_id=int(target_emoji))
+                        ))
+                        logger.info(f"Meeting status activated for: {event.summary}")
+                    except Exception as e:
+                        logger.error(f"Failed to update emoji status: {e}")
+
+                elif target_state is None and current_calendar_state is not None:
+                    # No active event - restore scheduled emoji
+                    logger.info("Calendar event ended, restoring schedule")
+                    scheduled_emoji_id = Schedule.get_current_emoji_id()
+                    if scheduled_emoji_id:
+                        try:
+                            await client(UpdateEmojiStatusRequest(
+                                emoji_status=EmojiStatus(document_id=scheduled_emoji_id)
+                            ))
+                            logger.info(f"Restored scheduled emoji: {scheduled_emoji_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to restore emoji status: {e}")
+
+                current_calendar_state = target_state
 
         except asyncio.CancelledError:
             logger.info("Calendar checker stopped")
-            # Clean up if we have an active meeting
-            if calendar_meeting_active:
+            # Clean up if we have an active calendar state
+            if current_calendar_state == 'meeting':
                 Schedule.end_meeting()
+            elif current_calendar_state == 'absence':
+                Schedule.end_absence()
             break
         except Exception as e:
             logger.error(f"Calendar checker error: {e}")

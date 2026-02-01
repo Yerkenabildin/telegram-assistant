@@ -329,6 +329,7 @@ def get_calendar_keyboard():
         toggle_data = b"calendar_off" if is_enabled else b"calendar_on"
         buttons.append([Button.inline(toggle_text, toggle_data)])
         buttons.append([Button.inline("🔗 Проверить подключение", b"calendar_test")])
+        buttons.append([Button.inline("🎨 Настроить emoji", b"calendar_emoji_setup")])
 
     buttons.append([Button.inline("⚙️ Настроить CalDAV", b"calendar_setup")])
     buttons.append([Button.inline("« Назад", b"main")])
@@ -1444,20 +1445,20 @@ def register_bot_handlers(bot, user_client=None):
         is_configured = Settings.is_caldav_configured()
         is_enabled = Settings.is_calendar_sync_enabled()
         meeting_emoji = Settings.get('meeting_emoji_id')
+        absence_emoji = Settings.get_absence_emoji_id()
 
         if is_configured:
             url = Settings.get_caldav_url() or ""
             # Hide URL details for privacy
             url_display = url.split("//")[-1].split("/")[0] if url else "не указан"
-            selected_calendars = Settings.get_caldav_calendars()
-            if selected_calendars:
-                calendar_info = f"{len(selected_calendars)} выбрано"
-            else:
-                calendar_info = "все"
+
+            # Get calendar type counts
+            meeting_cals = Settings.get_caldav_meeting_calendars()
+            absence_cals = Settings.get_caldav_absence_calendars()
 
             status_icon = "🟢" if is_enabled else "🔴"
-            status_text = "Включена" if is_enabled else "Выключена"
-            emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌ не задан"
+            meeting_emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌"
+            absence_emoji_status = f"`{absence_emoji}`" if absence_emoji else "❌"
 
             # Get calendar status with events
             cal_status = await caldav_service.get_calendar_status()
@@ -1465,14 +1466,16 @@ def register_bot_handlers(bot, user_client=None):
             text = (
                 f"📆 **Календарь** {status_icon}\n\n"
                 f"**Сервер:** {url_display}\n"
-                f"**Календари:** {calendar_info} (всего: {cal_status.get('calendar_count', '?')})\n"
-                f"**Emoji встречи:** {emoji_status}\n"
+                f"**Календари:** 📅 {len(meeting_cals)} встреч, 🏖 {len(absence_cals)} отсутств.\n"
+                f"**Emoji:** 📅 {meeting_emoji_status} | 🏖 {absence_emoji_status}\n"
             )
 
-            # Show current event
+            # Show current event with type
             current = cal_status.get('current_event')
             if current:
-                text += f"\n🔴 **Сейчас:** {current.summary}\n"
+                from services.caldav_service import CalendarEventType
+                type_icon = "🏖" if current.event_type == CalendarEventType.ABSENCE else "📅"
+                text += f"\n{type_icon} **Сейчас:** {current.summary}\n"
                 text += f"   до {current.end.strftime('%H:%M')} ({current.calendar_name})\n"
 
             # Show upcoming events
@@ -1490,7 +1493,7 @@ def register_bot_handlers(bot, user_client=None):
                 "📆 **Синхронизация с календарём**\n\n"
                 "⚠️ CalDAV не настроен\n\n"
                 "Настройте подключение к календарю для "
-                "автоматического изменения статуса во время встреч."
+                "автоматического изменения статуса во время встреч и отсутствий."
             )
 
         await event.edit(text, buttons=get_calendar_keyboard())
@@ -1525,6 +1528,82 @@ def register_bot_handlers(bot, user_client=None):
 
         await event.answer("🔴 Синхронизация выключена")
         await calendar_menu(event)
+
+    # Pending emoji setup states
+    _pending_meeting_emoji: set[int] = set()
+    _pending_absence_emoji: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"calendar_emoji_setup"))
+    async def calendar_emoji_setup(event):
+        """Show emoji setup menu for calendar events."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        meeting_emoji = Settings.get('meeting_emoji_id')
+        absence_emoji = Settings.get_absence_emoji_id()
+
+        meeting_status = f"`{meeting_emoji}`" if meeting_emoji else "не задан"
+        absence_status = f"`{absence_emoji}`" if absence_emoji else "не задан"
+
+        text = (
+            "🎨 **Настройка emoji для календаря**\n\n"
+            f"📅 **Встречи:** {meeting_status}\n"
+            "   Устанавливается когда активно событие из календаря встреч\n\n"
+            f"🏖 **Отсутствия:** {absence_status}\n"
+            "   Устанавливается когда активно событие из календаря отсутствий\n"
+            "   (приоритет выше чем у встреч)\n\n"
+            "Отправьте кастомный emoji чтобы настроить."
+        )
+
+        buttons = [
+            [Button.inline("📅 Emoji встречи", b"set_meeting_emoji")],
+            [Button.inline("🏖 Emoji отсутствия", b"set_absence_emoji")],
+            [Button.inline("« Назад", b"calendar")],
+        ]
+
+        await event.edit(text, buttons=buttons)
+
+    @bot.on(events.CallbackQuery(data=b"set_meeting_emoji"))
+    async def set_meeting_emoji_start(event):
+        """Start setting meeting emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_meeting_emoji.add(event.sender_id)
+        _pending_absence_emoji.discard(event.sender_id)
+
+        current = Settings.get('meeting_emoji_id')
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            f"📅 **Emoji для встреч**\n\n"
+            "Отправьте кастомный emoji для статуса во время встреч."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"calendar_emoji_setup")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"set_absence_emoji"))
+    async def set_absence_emoji_start(event):
+        """Start setting absence emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_absence_emoji.add(event.sender_id)
+        _pending_meeting_emoji.discard(event.sender_id)
+
+        current = Settings.get_absence_emoji_id()
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            f"🏖 **Emoji для отсутствий**\n\n"
+            "Отправьте кастомный emoji для статуса во время отсутствий.\n"
+            "Отсутствия имеют приоритет выше чем встречи."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"calendar_emoji_setup")]]
+        )
 
     @bot.on(events.CallbackQuery(data=b"calendar_test"))
     async def calendar_test(event):
@@ -1574,16 +1653,19 @@ def register_bot_handlers(bot, user_client=None):
         url = Settings.get_caldav_url()
         username = Settings.get_caldav_username()
         password = Settings.get_caldav_password()
-        selected_calendars = Settings.get_caldav_calendars()
+        meeting_cals = Settings.get_caldav_meeting_calendars()
+        absence_cals = Settings.get_caldav_absence_calendars()
 
         url_status = "✅" if url else "❌"
         user_status = "✅" if username else "❌"
         pass_status = "✅" if password else "❌"
 
-        if selected_calendars:
-            cal_info = f"{len(selected_calendars)} выбрано"
+        # Calendar info
+        total_configured = len(meeting_cals) + len(absence_cals)
+        if total_configured > 0:
+            cal_info = f"{len(meeting_cals)} встреч, {len(absence_cals)} отсутств."
         else:
-            cal_info = "все"
+            cal_info = "не настроены"
 
         text = (
             "⚙️ **Настройка CalDAV**\n\n"
@@ -1601,7 +1683,7 @@ def register_bot_handlers(bot, user_client=None):
             [Button.inline("🌐 URL сервера", b"caldav_url")],
             [Button.inline("👤 Логин", b"caldav_user")],
             [Button.inline("🔑 Пароль", b"caldav_pass")],
-            [Button.inline("📅 Выбрать календари", b"caldav_calendars")],
+            [Button.inline("📅 Настроить календари", b"caldav_calendars")],
             [Button.inline("« Назад", b"calendar")],
         ]
 
@@ -1663,7 +1745,7 @@ def register_bot_handlers(bot, user_client=None):
 
     @bot.on(events.CallbackQuery(data=b"caldav_calendars"))
     async def caldav_calendars_menu(event):
-        """Show available calendars for selection."""
+        """Show available calendars with type selection."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
@@ -1685,63 +1767,90 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
-        selected = Settings.get_caldav_calendars()
+        meeting_cals = Settings.get_caldav_meeting_calendars()
+        absence_cals = Settings.get_caldav_absence_calendars()
+        total_configured = len(meeting_cals) + len(absence_cals)
 
         text = (
-            "📅 **Выбор календарей**\n\n"
-            "Выберите календари для отслеживания встреч.\n"
-            "Если ничего не выбрано — используются все.\n\n"
+            "📅 **Настройка календарей**\n\n"
+            "Нажмите на календарь чтобы изменить его тип:\n"
+            "• ⬜ — не используется\n"
+            "• 📅 — встречи (meeting)\n"
+            "• 🏖 — отсутствие (absence)\n\n"
         )
 
-        if selected:
-            text += f"Выбрано: {len(selected)} из {len(calendars)}"
+        if total_configured > 0:
+            text += f"Настроено: {total_configured} из {len(calendars)}\n"
+            text += f"  📅 Встречи: {len(meeting_cals)}\n"
+            text += f"  🏖 Отсутствия: {len(absence_cals)}"
         else:
-            text += f"Используются все ({len(calendars)})"
+            text += "Календари не настроены"
 
         buttons = []
         for cal in calendars:
-            # Strip whitespace for consistent comparison
             cal_name = cal.name.strip()
-            is_selected = cal_name in selected
-            icon = "✅" if is_selected else "⬜"
-            callback_data = f"cal_toggle:{cal_name}".encode()
-            buttons.append([Button.inline(f"{icon} {cal.name}", callback_data)])
+            cal_type = Settings.get_calendar_type(cal_name)
 
-        buttons.append([Button.inline("🔄 Сбросить выбор", b"caldav_calendars_reset")])
+            if cal_type == 'meeting':
+                icon = "📅"
+                type_label = "встреча"
+            elif cal_type == 'absence':
+                icon = "🏖"
+                type_label = "отсутствие"
+            else:
+                icon = "⬜"
+                type_label = ""
+
+            label = f"{icon} {cal.name}"
+            if type_label:
+                label += f" ({type_label})"
+
+            callback_data = f"cal_type:{cal_name}".encode()
+            buttons.append([Button.inline(label, callback_data)])
+
+        buttons.append([Button.inline("🔄 Сбросить всё", b"caldav_calendars_reset")])
         buttons.append([Button.inline("« Назад", b"calendar_setup")])
 
         await event.edit(text, buttons=buttons)
 
-    @bot.on(events.CallbackQuery(pattern=rb"cal_toggle:(.+)"))
-    async def caldav_calendar_toggle(event):
-        """Toggle a calendar selection."""
+    @bot.on(events.CallbackQuery(pattern=rb"cal_type:(.+)"))
+    async def caldav_calendar_cycle_type(event):
+        """Cycle calendar type: none -> meeting -> absence -> none."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
         calendar_name = event.pattern_match.group(1).decode().strip()
-        selected = Settings.get_caldav_calendars()
+        current_type = Settings.get_calendar_type(calendar_name)
 
-        if calendar_name in selected:
-            Settings.remove_caldav_calendar(calendar_name)
-            await event.answer(f"❌ Отключен")
-        else:
-            Settings.add_caldav_calendar(calendar_name)
-            await event.answer(f"✅ Включен")
+        # Cycle: none -> meeting -> absence -> none
+        if current_type is None:
+            new_type = 'meeting'
+            await event.answer("📅 Встреча")
+        elif current_type == 'meeting':
+            new_type = 'absence'
+            await event.answer("🏖 Отсутствие")
+        else:  # absence
+            new_type = None
+            await event.answer("⬜ Не используется")
+
+        Settings.set_calendar_type(calendar_name, new_type)
+        caldav_service.clear_state()
 
         # Refresh the calendar list
         await caldav_calendars_menu(event)
 
     @bot.on(events.CallbackQuery(data=b"caldav_calendars_reset"))
     async def caldav_calendars_reset(event):
-        """Reset calendar selection to use all."""
+        """Reset all calendar type configurations."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        Settings.set_caldav_calendars([])
+        Settings.set_caldav_meeting_calendars([])
+        Settings.set_caldav_absence_calendars([])
         caldav_service.clear_state()
-        await event.answer("✅ Используются все календари")
+        await event.answer("✅ Все настройки сброшены")
 
         # Refresh the calendar list
         await caldav_calendars_menu(event)
@@ -2567,6 +2676,60 @@ def register_bot_handlers(bot, user_client=None):
                 event.sender_id,
                 "✅ Пароль сохранён!",
                 buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting meeting emoji
+        if event.sender_id in _pending_meeting_emoji:
+            # Extract custom emoji from message
+            emoji_id = None
+            if event.message.entities:
+                for entity in event.message.entities:
+                    if hasattr(entity, 'document_id'):
+                        emoji_id = str(entity.document_id)
+                        break
+
+            if not emoji_id:
+                await event.respond(
+                    "❌ Отправьте кастомный emoji (не обычный)",
+                    buttons=[[Button.inline("❌ Отмена", b"calendar_emoji_setup")]]
+                )
+                return
+
+            Settings.set('meeting_emoji_id', emoji_id)
+            _pending_meeting_emoji.discard(event.sender_id)
+            logger.info(f"Meeting emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Emoji для встреч сохранён!\n\nID: `{emoji_id}`",
+                buttons=[[Button.inline("« Назад", b"calendar_emoji_setup")]]
+            )
+            return
+
+        # Check if user is setting absence emoji
+        if event.sender_id in _pending_absence_emoji:
+            # Extract custom emoji from message
+            emoji_id = None
+            if event.message.entities:
+                for entity in event.message.entities:
+                    if hasattr(entity, 'document_id'):
+                        emoji_id = str(entity.document_id)
+                        break
+
+            if not emoji_id:
+                await event.respond(
+                    "❌ Отправьте кастомный emoji (не обычный)",
+                    buttons=[[Button.inline("❌ Отмена", b"calendar_emoji_setup")]]
+                )
+                return
+
+            Settings.set_absence_emoji_id(emoji_id)
+            _pending_absence_emoji.discard(event.sender_id)
+            logger.info(f"Absence emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Emoji для отсутствий сохранён!\n\nID: `{emoji_id}`",
+                buttons=[[Button.inline("« Назад", b"calendar_emoji_setup")]]
             )
             return
 

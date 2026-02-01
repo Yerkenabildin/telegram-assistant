@@ -3,14 +3,15 @@ CalDAV calendar integration service.
 
 Checks for active calendar events and manages meeting status accordingly.
 Settings are stored in database and configured via bot interface.
-Supports multiple calendars.
+Supports multiple calendars with event type classification (meeting/absence).
 """
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional
+from enum import Enum
+from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from config import config
@@ -25,11 +26,18 @@ except ImportError:
     caldav = None
 
 
+class CalendarEventType(Enum):
+    """Type of calendar event based on calendar configuration."""
+    MEETING = "meeting"
+    ABSENCE = "absence"
+
+
 @dataclass
 class CalendarInfo:
     """Information about a calendar."""
     name: str
     url: str
+    event_type: Optional[str] = None  # 'meeting', 'absence', or None
 
 
 @dataclass
@@ -40,6 +48,7 @@ class CalendarEvent:
     start: datetime
     end: datetime
     calendar_name: str
+    event_type: CalendarEventType = CalendarEventType.MEETING
     description: Optional[str] = None
 
 
@@ -142,7 +151,9 @@ class CalDAVService:
         self._last_event_uid = None
 
     async def get_available_calendars(self) -> list[CalendarInfo]:
-        """Get list of all available calendars on the server."""
+        """Get list of all available calendars on the server with their configured types."""
+        from models import Settings
+
         if self._needs_reconnect():
             self.disconnect()
 
@@ -151,21 +162,48 @@ class CalDAVService:
                 return []
 
         return [
-            CalendarInfo(name=cal.name, url=str(cal.url))
+            CalendarInfo(
+                name=cal.name,
+                url=str(cal.url),
+                event_type=Settings.get_calendar_type(cal.name)
+            )
             for cal in self._all_calendars
         ]
 
     def _get_active_calendars(self) -> list[caldav.Calendar]:
-        """Get calendars to check based on Settings."""
+        """Get calendars to check based on Settings (all configured calendars)."""
         from models import Settings
 
-        selected = Settings.get_caldav_calendars()
+        meeting_cals = Settings.get_caldav_meeting_calendars()
+        absence_cals = Settings.get_caldav_absence_calendars()
+        selected = set(meeting_cals + absence_cals)
 
         if not selected:
-            # No selection = use all calendars
+            # No selection = use all calendars (legacy behavior)
             return self._all_calendars
 
         # Filter by selected names (strip whitespace for consistent matching)
+        return [c for c in self._all_calendars if c.name.strip() in selected]
+
+    def _get_calendars_by_type(self, event_type: CalendarEventType) -> list[caldav.Calendar]:
+        """Get calendars configured for a specific event type.
+
+        Args:
+            event_type: MEETING or ABSENCE
+
+        Returns:
+            List of caldav.Calendar objects matching the type
+        """
+        from models import Settings
+
+        if event_type == CalendarEventType.MEETING:
+            selected = Settings.get_caldav_meeting_calendars()
+        else:
+            selected = Settings.get_caldav_absence_calendars()
+
+        if not selected:
+            return []
+
         return [c for c in self._all_calendars if c.name.strip() in selected]
 
     async def get_current_event(self) -> Optional[CalendarEvent]:
@@ -215,7 +253,7 @@ class CalDAVService:
                             is_active = self._is_event_active(cal_event, now)
                             logger.debug(
                                 f"Event '{cal_event.summary}' ({cal_event.start} - {cal_event.end}): "
-                                f"active={is_active}"
+                                f"active={is_active}, type={cal_event.event_type.value}"
                             )
                             if is_active:
                                 return cal_event
@@ -228,6 +266,66 @@ class CalDAVService:
                 continue
 
         return None
+
+    def _get_current_event_by_type_sync(self, event_type: CalendarEventType) -> Optional[CalendarEvent]:
+        """Synchronously get current calendar event of a specific type."""
+        now = datetime.now(self._tz)
+        start = now - timedelta(hours=1)
+        end = now + timedelta(hours=1)
+
+        calendars = self._get_calendars_by_type(event_type)
+        logger.debug(f"Checking {len(calendars)} {event_type.value} calendars for active events")
+
+        for calendar in calendars:
+            try:
+                events = calendar.search(
+                    start=start,
+                    end=end,
+                    event=True,
+                    expand=True
+                )
+
+                for event in events:
+                    try:
+                        cal_event = self._parse_event(event, calendar.name, event_type)
+                        if cal_event and self._is_event_active(cal_event, now):
+                            return cal_event
+                    except Exception as e:
+                        logger.warning(f"Error parsing event: {e}")
+                        continue
+
+            except Exception as e:
+                logger.warning(f"Error searching calendar {calendar.name}: {e}")
+                continue
+
+        return None
+
+    async def get_current_event_by_type(self, event_type: CalendarEventType) -> Optional[CalendarEvent]:
+        """Get currently active calendar event of a specific type.
+
+        Args:
+            event_type: MEETING or ABSENCE
+
+        Returns:
+            Active CalendarEvent or None
+        """
+        if self._needs_reconnect():
+            logger.info("CalDAV settings changed, reconnecting...")
+            self.disconnect()
+
+        if not self._all_calendars:
+            if not await self.connect():
+                return None
+
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(
+                None,
+                lambda: self._get_current_event_by_type_sync(event_type)
+            )
+        except Exception as e:
+            logger.error(f"Error fetching {event_type.value} events: {e}")
+            return None
 
     def _get_upcoming_events_sync(self, hours: int = 24) -> list[CalendarEvent]:
         """Synchronously get upcoming calendar events from active calendars."""
@@ -333,8 +431,19 @@ class CalDAVService:
 
         return result
 
-    def _parse_event(self, event, calendar_name: str) -> Optional[CalendarEvent]:
-        """Parse caldav event into CalendarEvent dataclass."""
+    def _parse_event(
+        self,
+        event,
+        calendar_name: str,
+        event_type: Optional[CalendarEventType] = None
+    ) -> Optional[CalendarEvent]:
+        """Parse caldav event into CalendarEvent dataclass.
+
+        Args:
+            event: caldav event object
+            calendar_name: Name of the source calendar
+            event_type: Explicit event type, or None to determine from calendar settings
+        """
         try:
             vevent = event.vobject_instance.vevent
 
@@ -361,12 +470,22 @@ class CalDAVService:
             description = str(vevent.description.value) if hasattr(vevent, 'description') else None
             uid = str(vevent.uid.value) if hasattr(vevent, 'uid') else str(id(event))
 
+            # Determine event type from calendar settings if not provided
+            if event_type is None:
+                from models import Settings
+                cal_type = Settings.get_calendar_type(calendar_name)
+                if cal_type == 'absence':
+                    event_type = CalendarEventType.ABSENCE
+                else:
+                    event_type = CalendarEventType.MEETING
+
             return CalendarEvent(
                 uid=uid,
                 summary=summary,
                 start=dtstart,
                 end=dtend,
                 calendar_name=calendar_name,
+                event_type=event_type,
                 description=description
             )
         except Exception as e:
@@ -401,6 +520,54 @@ class CalDAVService:
                 logger.info("Calendar meeting ended")
                 self._last_event_uid = None
             return False, None
+
+    async def check_calendar_status_with_priority(
+        self
+    ) -> Tuple[Optional[CalendarEventType], Optional[CalendarEvent]]:
+        """Check calendar status with priority: absence > meeting.
+
+        Returns:
+            Tuple of (event_type, event) where:
+            - event_type is ABSENCE if there's an active absence event
+            - event_type is MEETING if there's an active meeting event (no absence)
+            - (None, None) if no active events
+
+        Absence events have higher priority than meeting events.
+        """
+        if self._needs_reconnect():
+            logger.info("CalDAV settings changed, reconnecting...")
+            self.disconnect()
+
+        if not self._all_calendars:
+            if not await self.connect():
+                return None, None
+
+        # Check absence first (higher priority)
+        absence_event = await self.get_current_event_by_type(CalendarEventType.ABSENCE)
+        if absence_event:
+            if absence_event.uid != self._last_event_uid:
+                logger.info(
+                    f"Calendar absence started: {absence_event.summary} ({absence_event.calendar_name})"
+                )
+                self._last_event_uid = absence_event.uid
+            return CalendarEventType.ABSENCE, absence_event
+
+        # Check meeting if no absence
+        meeting_event = await self.get_current_event_by_type(CalendarEventType.MEETING)
+        if meeting_event:
+            if meeting_event.uid != self._last_event_uid:
+                logger.info(
+                    f"Calendar meeting started: {meeting_event.summary} ({meeting_event.calendar_name})"
+                )
+                self._last_event_uid = meeting_event.uid
+            return CalendarEventType.MEETING, meeting_event
+
+        # No active events
+        if self._last_event_uid:
+            logger.info("Calendar event ended")
+            self._last_event_uid = None
+
+        return None, None
 
     def get_last_event_uid(self) -> Optional[str]:
         """Get UID of the last tracked event."""
