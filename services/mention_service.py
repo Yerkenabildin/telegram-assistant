@@ -317,6 +317,127 @@ class MentionService:
 
         return "\n".join(lines)
 
+    def generate_private_summary(
+        self,
+        messages: List[Any],
+        current_message: Any,
+        max_context_messages: int = 5
+    ) -> str:
+        """
+        Generate a short summary of the private conversation context.
+
+        Args:
+            messages: List of messages (newest first)
+            current_message: The new message that triggered the notification
+            max_context_messages: Maximum messages to include in summary
+
+        Returns:
+            Summary text
+        """
+        current_text = getattr(current_message, 'text', '') or ''
+
+        # Collect text for topic detection
+        all_text_parts = [current_text]
+
+        # Get recent messages for context (excluding the current one)
+        context_msgs = []
+        for msg in messages:
+            if msg.id == current_message.id:
+                continue
+            if len(context_msgs) >= max_context_messages:
+                break
+            text = getattr(msg, 'text', '') or ''
+            if text.strip():
+                context_msgs.append(text)
+                all_text_parts.append(text)
+
+        # Detect topics from all messages
+        all_text = ' '.join(all_text_parts)
+        detected_topics = self._detect_topics(all_text)
+
+        # Build summary
+        lines = []
+
+        # Add detected topic if found
+        if detected_topics:
+            lines.append("📌 Тема:")
+            lines.append(f"  {detected_topics[0]}")
+            if len(detected_topics) > 1:
+                lines.append(f"  (также: {', '.join(detected_topics[1:3])})")
+        else:
+            lines.append("📌 Тема: общение")
+
+        # Add brief context (last 2 messages max)
+        if context_msgs:
+            lines.append("")
+            lines.append("💬 Контекст разговора:")
+            for text in reversed(context_msgs[-2:]):
+                if len(text) > 80:
+                    text = text[:80] + "..."
+                lines.append(f"  «{text}»")
+
+        return "\n".join(lines)
+
+    async def generate_private_summary_with_ai(
+        self,
+        messages: List[Any],
+        current_message: Any,
+        sender_name: str
+    ) -> Tuple[str, Optional[bool]]:
+        """
+        Generate summary for private message using Yandex GPT if available.
+
+        Args:
+            messages: List of messages (newest first)
+            current_message: The new message
+            sender_name: Name of the sender
+
+        Returns:
+            Tuple of (summary text, is_urgent from AI or None)
+        """
+        from services.yandex_gpt_service import get_yandex_gpt_service
+
+        gpt_service = get_yandex_gpt_service()
+
+        if gpt_service is None:
+            logger.debug("Yandex GPT not configured, using keyword-based summary")
+            return self.generate_private_summary(messages, current_message), None
+
+        current_text = getattr(current_message, 'text', '') or ''
+
+        # Prepare context messages
+        context_texts = []
+        for msg in messages:
+            if msg.id == current_message.id:
+                continue
+            if len(context_texts) >= 8:
+                break
+            text = getattr(msg, 'text', '') or ''
+            if text.strip():
+                # Mark if message is from sender or from me
+                is_outgoing = getattr(msg, 'out', False)
+                prefix = "[Я] " if is_outgoing else f"[{sender_name}] "
+                context_texts.append(f"{prefix}{text}")
+
+        # Reverse to get chronological order
+        context_texts = list(reversed(context_texts))
+
+        try:
+            summary, is_urgent = await gpt_service.summarize_mention(
+                messages=context_texts,
+                mention_message=current_text,
+                chat_title=f"Личный чат с {sender_name}"
+            )
+
+            if summary:
+                logger.info("Generated private message summary using Yandex GPT")
+                return summary, is_urgent
+
+        except Exception as e:
+            logger.warning(f"Yandex GPT failed for private message, falling back: {e}")
+
+        return self.generate_private_summary(messages, current_message), None
+
     async def generate_summary_with_ai(
         self,
         messages: List[Any],
@@ -511,3 +632,66 @@ class MentionService:
             chat_id_str = str(chat_id)
 
         return f"https://t.me/c/{chat_id_str}/{message_id}"
+
+    def format_private_notification(
+        self,
+        sender_name: str,
+        sender_username: Optional[str],
+        summary: str,
+        is_urgent: bool,
+        message_text: str
+    ) -> str:
+        """
+        Format notification for private message.
+
+        Args:
+            sender_name: Display name of the sender
+            sender_username: Username of the sender (may be None)
+            summary: Generated summary of context
+            is_urgent: Whether this is an urgent message
+            message_text: The actual message text (truncated)
+
+        Returns:
+            Formatted notification message
+        """
+        # Header with urgency indicator
+        if is_urgent:
+            header = "🚨 Срочное личное сообщение!"
+        else:
+            header = "💬 Личное сообщение"
+
+        # Sender info with link
+        if sender_username:
+            sender_info = f"@{sender_username} ({sender_name})"
+            sender_link = f"https://t.me/{sender_username}"
+        else:
+            sender_info = sender_name
+            sender_link = None
+
+        # Truncate message text
+        if len(message_text) > 200:
+            message_text = message_text[:200] + "..."
+
+        # Build message
+        lines = [
+            header,
+            "",
+            f"👤 От: {sender_info}",
+            "",
+        ]
+
+        # Add summary if present
+        if summary:
+            lines.append(summary)
+            lines.append("")
+
+        # Add the message itself
+        lines.append("✉️ Сообщение:")
+        lines.append(f"  «{message_text}»")
+
+        # Add link to conversation
+        if sender_link:
+            lines.append("")
+            lines.append(f"🔗 Открыть диалог: {sender_link}")
+
+        return "\n".join(lines)

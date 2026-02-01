@@ -604,6 +604,97 @@ def register_handlers(client, bot=None):
             logger.error(f"Failed to send mention notification: {e}")
 
     @client.on(events.NewMessage(incoming=True))
+    async def private_message_context_handler(event):
+        """Handle incoming private messages - notify with context when offline."""
+        # Only private chats
+        if not event.is_private:
+            return
+
+        # Check if private notifications are enabled
+        if not Settings.is_private_notification_enabled():
+            return
+
+        # Ignore bots
+        sender = await event.get_sender()
+        if getattr(sender, 'bot', False):
+            return
+
+        # Check if user is "online" (has available/work emoji)
+        me = await client.get_me()
+        emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
+        is_online = not _mention_service.should_notify(emoji_status_id)
+
+        # For private messages, only notify when offline
+        if is_online:
+            logger.debug("User is online, skipping private message notification")
+            return
+
+        # Get sender info
+        sender_name = _get_display_name(sender)
+        sender_username = getattr(sender, 'username', None)
+        sender_id = getattr(sender, 'id', 0)
+
+        message_text = event.message.text or ''
+        if not message_text.strip():
+            return  # Skip empty messages (stickers, media, etc.)
+
+        logger.info(f"Private message notification for message from {sender_name}")
+
+        # Fetch recent messages for context
+        try:
+            user_identifier = sender_username or sender_id
+            messages = await client.get_messages(user_identifier, limit=_mention_service.message_limit)
+            messages = _mention_service.filter_messages_by_time(messages)
+        except Exception as e:
+            logger.warning(f"Failed to fetch messages for private context: {e}")
+            messages = [event.message]
+
+        # Generate summary (try AI first, fallback to keywords)
+        summary, ai_urgency = await _mention_service.generate_private_summary_with_ai(
+            messages, event.message, sender_name
+        )
+
+        # Check urgency: VIP sender always urgent, then AI, then keywords
+        is_vip = _mention_service.is_vip_sender(sender_username)
+        if is_vip:
+            is_urgent = True
+            logger.debug(f"Urgency from VIP sender: {sender_username}")
+        elif ai_urgency is not None:
+            is_urgent = ai_urgency
+            logger.debug(f"Urgency from AI: {is_urgent}")
+        else:
+            is_urgent = _mention_service.is_urgent(messages)
+            logger.debug(f"Urgency from keywords: {is_urgent}")
+
+        # Format notification
+        notification = _mention_service.format_private_notification(
+            sender_name=sender_name,
+            sender_username=sender_username,
+            summary=summary,
+            is_urgent=is_urgent,
+            message_text=message_text
+        )
+
+        # Send notification via user client (we're offline)
+        try:
+            await client.send_message(
+                config.personal_tg_login,
+                notification,
+                silent=not is_urgent
+            )
+            logger.info(f"Private message notification sent (urgent={is_urgent})")
+
+            # Call webhook if configured
+            if config.asap_webhook_url:
+                await _notification_service.call_webhook(
+                    sender_username=sender_username,
+                    sender_id=sender_id,
+                    message_text=message_text
+                )
+        except Exception as e:
+            logger.error(f"Failed to send private message notification: {e}")
+
+    @client.on(events.NewMessage(incoming=True))
     async def new_messages(event):
         """Handle incoming messages for auto-reply."""
         if not event.is_private:
