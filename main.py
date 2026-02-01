@@ -328,6 +328,7 @@ async def calendar_checker():
 
             # Check for active meeting
             is_meeting, event = await caldav_service.check_meeting_status()
+            logger.debug(f"Calendar check: is_meeting={is_meeting}, active_flag={calendar_meeting_active}")
 
             if is_meeting and not calendar_meeting_active:
                 # Meeting started - activate meeting status

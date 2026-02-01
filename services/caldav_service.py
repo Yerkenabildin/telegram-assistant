@@ -192,10 +192,12 @@ class CalDAVService:
     def _get_current_event_sync(self) -> Optional[CalendarEvent]:
         """Synchronously get current calendar event from active calendars."""
         now = datetime.now(self._tz)
-        start = now - timedelta(minutes=1)
-        end = now + timedelta(minutes=1)
+        # Widen search window to catch events that might have started
+        start = now - timedelta(hours=1)
+        end = now + timedelta(hours=1)
 
         active_calendars = self._get_active_calendars()
+        logger.debug(f"Checking {len(active_calendars)} calendars for active events at {now}")
 
         for calendar in active_calendars:
             try:
@@ -209,8 +211,14 @@ class CalDAVService:
                 for event in events:
                     try:
                         cal_event = self._parse_event(event, calendar.name)
-                        if cal_event and self._is_event_active(cal_event, now):
-                            return cal_event
+                        if cal_event:
+                            is_active = self._is_event_active(cal_event, now)
+                            logger.debug(
+                                f"Event '{cal_event.summary}' ({cal_event.start} - {cal_event.end}): "
+                                f"active={is_active}"
+                            )
+                            if is_active:
+                                return cal_event
                     except Exception as e:
                         logger.warning(f"Error parsing event: {e}")
                         continue
@@ -367,7 +375,17 @@ class CalDAVService:
 
     def _is_event_active(self, event: CalendarEvent, now: datetime) -> bool:
         """Check if event is currently active."""
-        return event.start <= now <= event.end
+        # Ensure consistent timezone comparison
+        event_start = event.start
+        event_end = event.end
+
+        # Convert to same timezone if needed
+        if event_start.tzinfo is None:
+            event_start = event_start.replace(tzinfo=self._tz)
+        if event_end.tzinfo is None:
+            event_end = event_end.replace(tzinfo=self._tz)
+
+        return event_start <= now <= event_end
 
     async def check_meeting_status(self) -> tuple[bool, Optional[CalendarEvent]]:
         """Check if there's an active meeting in any active calendar."""
