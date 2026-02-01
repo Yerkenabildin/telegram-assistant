@@ -3081,21 +3081,33 @@ class TestPrivateMessageBotNotification:
 class TestPrivateMessageWebhookIntegration:
     """Tests for webhook integration with private message notifications."""
 
-    def test_webhook_called_when_configured(self):
-        """Test webhook is called when configured."""
+    def test_webhook_called_when_asap_in_message(self):
+        """Test webhook is called when message contains ASAP."""
         webhook_url = "https://example.com/webhook"
-        notification_sent = True
+        message_text = "Need help ASAP please"
 
-        should_call_webhook = webhook_url and notification_sent
+        has_asap = 'asap' in message_text.lower()
+        should_call_webhook = webhook_url and has_asap
 
         assert should_call_webhook is True
+
+    def test_webhook_not_called_without_asap(self):
+        """Test webhook is not called when message doesn't contain ASAP."""
+        webhook_url = "https://example.com/webhook"
+        message_text = "Hello, can you help me?"
+
+        has_asap = 'asap' in message_text.lower()
+        should_call_webhook = webhook_url and has_asap
+
+        assert should_call_webhook is False
 
     def test_webhook_not_called_when_not_configured(self):
         """Test webhook is not called when not configured."""
         webhook_url = None
-        notification_sent = True
+        message_text = "Need help ASAP"
 
-        should_call_webhook = bool(webhook_url) and notification_sent
+        has_asap = 'asap' in message_text.lower()
+        should_call_webhook = bool(webhook_url) and has_asap
 
         assert should_call_webhook is False
 

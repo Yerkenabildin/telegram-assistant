@@ -704,8 +704,8 @@ def register_handlers(client, bot=None):
                 )
                 logger.info(f"Private message notification sent via user client (urgent={is_urgent})")
 
-            # Call webhook if configured
-            if config.asap_webhook_url:
+            # Call webhook only if message contains ASAP
+            if config.asap_webhook_url and 'asap' in message_text.lower():
                 await _notification_service.call_webhook(
                     sender_username=sender_username,
                     sender_id=sender_id,

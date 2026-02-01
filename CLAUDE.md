@@ -531,7 +531,7 @@ Incoming private message:
 - `private_notification_enabled` - Enable/disable private message notifications (default: false)
 
 **Webhook integration:**
-- If `ASAP_WEBHOOK_URL` is configured, it will be called when a private message notification is sent
+- If `ASAP_WEBHOOK_URL` is configured and message contains "ASAP", webhook will be called
 - Uses the same webhook format as ASAP notifications
 
 Note: Same urgency detection and VIP sender logic applies as for group mentions.
