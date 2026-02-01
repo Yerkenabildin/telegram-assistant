@@ -62,7 +62,8 @@ PRIORITY_MORNING = 2     # Morning (before work) on weekdays
 PRIORITY_EVENING = 3     # Evening (after work) on weekdays
 PRIORITY_WEEKENDS = 8    # Weekends schedule
 PRIORITY_WORK = 10       # Work schedule
-PRIORITY_MEETING = 50    # Active meeting/call (via API)
+PRIORITY_MEETING = 50    # Active meeting/call (via API or calendar)
+PRIORITY_ABSENCE = 75    # Absence from calendar (OOO, vacation calendar events)
 PRIORITY_OVERRIDE = 100  # Override rules (vacation, sick leave, etc.)
 
 
@@ -493,6 +494,117 @@ class Settings(Model):
             Settings.get_caldav_username() and
             Settings.get_caldav_password()
         )
+
+    # =========================================================================
+    # CalDAV Calendar Type Mappings (meeting vs absence)
+    # =========================================================================
+
+    @staticmethod
+    def get_caldav_meeting_calendars() -> list[str]:
+        """Get list of calendars configured as 'meeting' type.
+
+        Returns empty list if not configured.
+        Falls back to old 'caldav_calendars' setting for migration.
+        """
+        value = Settings.get('caldav_meeting_calendars')
+        if value:
+            return [c.strip() for c in value.split('|') if c.strip()]
+        # Migration: check old setting
+        old_value = Settings.get('caldav_calendars')
+        if old_value:
+            return [c.strip() for c in old_value.split('|') if c.strip()]
+        return []
+
+    @staticmethod
+    def set_caldav_meeting_calendars(calendars: list[str]) -> None:
+        """Set list of calendars configured as 'meeting' type."""
+        if not calendars:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_meeting_calendars'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_meeting_calendars', '|'.join(calendars))
+
+    @staticmethod
+    def get_caldav_absence_calendars() -> list[str]:
+        """Get list of calendars configured as 'absence' type.
+
+        Returns empty list if not configured.
+        """
+        value = Settings.get('caldav_absence_calendars')
+        if not value:
+            return []
+        return [c.strip() for c in value.split('|') if c.strip()]
+
+    @staticmethod
+    def set_caldav_absence_calendars(calendars: list[str]) -> None:
+        """Set list of calendars configured as 'absence' type."""
+        if not calendars:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_absence_calendars'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_absence_calendars', '|'.join(calendars))
+
+    @staticmethod
+    def get_calendar_type(calendar_name: str) -> Optional[str]:
+        """Get type of a calendar: 'meeting', 'absence', or None (not configured).
+
+        Args:
+            calendar_name: Name of the calendar
+
+        Returns:
+            'meeting', 'absence', or None
+        """
+        if calendar_name in Settings.get_caldav_meeting_calendars():
+            return 'meeting'
+        if calendar_name in Settings.get_caldav_absence_calendars():
+            return 'absence'
+        return None
+
+    @staticmethod
+    def set_calendar_type(calendar_name: str, cal_type: Optional[str]) -> None:
+        """Set type of a calendar.
+
+        Args:
+            calendar_name: Name of the calendar
+            cal_type: 'meeting', 'absence', or None to remove
+        """
+        calendar_name = calendar_name.strip()
+
+        # Remove from both lists first
+        meeting_cals = Settings.get_caldav_meeting_calendars()
+        absence_cals = Settings.get_caldav_absence_calendars()
+
+        if calendar_name in meeting_cals:
+            meeting_cals.remove(calendar_name)
+            Settings.set_caldav_meeting_calendars(meeting_cals)
+        if calendar_name in absence_cals:
+            absence_cals.remove(calendar_name)
+            Settings.set_caldav_absence_calendars(absence_cals)
+
+        # Add to appropriate list
+        if cal_type == 'meeting':
+            meeting_cals.append(calendar_name)
+            Settings.set_caldav_meeting_calendars(meeting_cals)
+        elif cal_type == 'absence':
+            absence_cals.append(calendar_name)
+            Settings.set_caldav_absence_calendars(absence_cals)
+
+    @staticmethod
+    def get_absence_emoji_id() -> Optional[str]:
+        """Get emoji ID for absence status."""
+        return Settings.get('absence_emoji_id')
+
+    @staticmethod
+    def set_absence_emoji_id(emoji_id: Optional[str]) -> None:
+        """Set emoji ID for absence status."""
+        if emoji_id is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'absence_emoji_id'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('absence_emoji_id', str(emoji_id))
 
 
 class Schedule(Model):
@@ -967,6 +1079,44 @@ class Schedule(Model):
         meeting = Schedule.get_active_meeting()
         if meeting:
             meeting.delete()
+            return True
+        return False
+
+    # Absence management methods (from calendar absence events)
+    @staticmethod
+    def get_active_absence():
+        """Get active absence rule if exists"""
+        all_rules = Schedule.get_all()
+        for rule in all_rules:
+            if rule.priority == PRIORITY_ABSENCE:
+                return rule
+        return None
+
+    @staticmethod
+    def start_absence(emoji_id):
+        """Start an absence - creates a high-priority rule that covers all time.
+
+        Absence has higher priority than meeting (75 vs 50).
+        """
+        # Remove any existing absence rule first
+        Schedule.end_absence()
+
+        # Create absence rule (all days, all time, priority 75)
+        return Schedule.create(
+            emoji_id=emoji_id,
+            days=[0, 1, 2, 3, 4, 5, 6],
+            time_start="00:00",
+            time_end="23:59",
+            priority=PRIORITY_ABSENCE,
+            name="absence"
+        )
+
+    @staticmethod
+    def end_absence():
+        """End absence - removes the absence rule"""
+        absence = Schedule.get_active_absence()
+        if absence:
+            absence.delete()
             return True
         return False
 
