@@ -221,6 +221,110 @@ class CalDAVService:
 
         return None
 
+    def _get_upcoming_events_sync(self, hours: int = 24) -> list[CalendarEvent]:
+        """Synchronously get upcoming calendar events from active calendars."""
+        now = datetime.now(self._tz)
+        end = now + timedelta(hours=hours)
+
+        active_calendars = self._get_active_calendars()
+        all_events = []
+
+        for calendar in active_calendars:
+            try:
+                events = calendar.search(
+                    start=now,
+                    end=end,
+                    event=True,
+                    expand=True
+                )
+
+                for event in events:
+                    try:
+                        cal_event = self._parse_event(event, calendar.name)
+                        if cal_event:
+                            all_events.append(cal_event)
+                    except Exception as e:
+                        logger.warning(f"Error parsing event: {e}")
+                        continue
+
+            except Exception as e:
+                logger.warning(f"Error searching calendar {calendar.name}: {e}")
+                continue
+
+        # Sort by start time
+        all_events.sort(key=lambda e: e.start)
+        return all_events
+
+    async def get_upcoming_events(self, hours: int = 24) -> list[CalendarEvent]:
+        """Get upcoming calendar events from active calendars.
+
+        Args:
+            hours: Number of hours ahead to look for events
+
+        Returns:
+            List of upcoming events sorted by start time
+        """
+        if self._needs_reconnect():
+            logger.info("CalDAV settings changed, reconnecting...")
+            self.disconnect()
+
+        if not self._all_calendars:
+            if not await self.connect():
+                return []
+
+        try:
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, lambda: self._get_upcoming_events_sync(hours))
+        except Exception as e:
+            logger.error(f"Error fetching upcoming events: {e}")
+            return []
+
+    async def get_calendar_status(self) -> dict:
+        """Get calendar status info for display in bot menu.
+
+        Returns:
+            Dict with status info: connected, calendar_count, current_event, upcoming_events
+        """
+        result = {
+            'connected': False,
+            'calendar_count': 0,
+            'active_calendar_count': 0,
+            'current_event': None,
+            'upcoming_events': [],
+            'error': None
+        }
+
+        if not self.is_configured():
+            result['error'] = "CalDAV не настроен"
+            return result
+
+        try:
+            if not self._all_calendars:
+                if not await self.connect():
+                    result['error'] = "Не удалось подключиться"
+                    return result
+
+            result['connected'] = True
+            result['calendar_count'] = len(self._all_calendars)
+            result['active_calendar_count'] = len(self._get_active_calendars())
+
+            # Get current event
+            current = await self.get_current_event()
+            if current:
+                result['current_event'] = current
+
+            # Get upcoming events (next 8 hours, max 5)
+            upcoming = await self.get_upcoming_events(hours=8)
+            # Filter out current event if it's in the list
+            if current:
+                upcoming = [e for e in upcoming if e.uid != current.uid]
+            result['upcoming_events'] = upcoming[:5]
+
+        except Exception as e:
+            result['error'] = str(e)
+
+        return result
+
     def _parse_event(self, event, calendar_name: str) -> Optional[CalendarEvent]:
         """Parse caldav event into CalendarEvent dataclass."""
         try:

@@ -1453,21 +1453,38 @@ def register_bot_handlers(bot, user_client=None):
             if selected_calendars:
                 calendar_info = f"{len(selected_calendars)} выбрано"
             else:
-                calendar_info = "все доступные"
+                calendar_info = "все"
 
-            status = "🟢 Включена" if is_enabled else "🔴 Выключена"
-            emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌ не настроен (задайте в Расписание)"
+            status_icon = "🟢" if is_enabled else "🔴"
+            status_text = "Включена" if is_enabled else "Выключена"
+            emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌ не задан"
+
+            # Get calendar status with events
+            cal_status = await caldav_service.get_calendar_status()
 
             text = (
-                "📆 **Синхронизация с календарём**\n\n"
-                f"**Статус:** {status}\n"
+                f"📆 **Календарь** {status_icon}\n\n"
                 f"**Сервер:** {url_display}\n"
-                f"**Календари:** {calendar_info}\n"
-                f"**Emoji встречи:** {emoji_status}\n\n"
-                "При начале события в календаре автоматически "
-                "включается статус встречи. После окончания — "
-                "восстанавливается расписание."
+                f"**Календари:** {calendar_info} (всего: {cal_status.get('calendar_count', '?')})\n"
+                f"**Emoji встречи:** {emoji_status}\n"
             )
+
+            # Show current event
+            current = cal_status.get('current_event')
+            if current:
+                text += f"\n🔴 **Сейчас:** {current.summary}\n"
+                text += f"   до {current.end.strftime('%H:%M')} ({current.calendar_name})\n"
+
+            # Show upcoming events
+            upcoming = cal_status.get('upcoming_events', [])
+            if upcoming:
+                text += "\n📋 **Ближайшие:**\n"
+                for evt in upcoming[:3]:
+                    time_str = evt.start.strftime('%H:%M')
+                    text += f"• {time_str} — {evt.summary[:30]}\n"
+            elif not current:
+                text += "\n✅ Нет ближайших событий\n"
+
         else:
             text = (
                 "📆 **Синхронизация с календарём**\n\n"
@@ -1516,14 +1533,36 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        await event.answer("🔄 Проверяю подключение...")
+        await event.answer("🔄 Проверяю...")
 
-        success, message = await caldav_service.test_connection()
+        # Get detailed status
+        status = await caldav_service.get_calendar_status()
 
-        if success:
-            await event.answer(f"✅ {message}", alert=True)
+        if status.get('connected'):
+            cal_count = status.get('calendar_count', 0)
+            active_count = status.get('active_calendar_count', 0)
+            current = status.get('current_event')
+            upcoming = status.get('upcoming_events', [])
+
+            text = f"✅ **Подключение успешно**\n\n"
+            text += f"📅 Календарей: {cal_count} (активных: {active_count})\n"
+
+            if current:
+                text += f"\n🔴 **Сейчас идёт:** {current.summary}\n"
+                text += f"   {current.start.strftime('%H:%M')} - {current.end.strftime('%H:%M')}\n"
+                text += f"   Календарь: {current.calendar_name}\n"
+
+            if upcoming:
+                text += f"\n📋 **Ближайшие события:**\n"
+                for evt in upcoming[:5]:
+                    text += f"• {evt.start.strftime('%H:%M')} — {evt.summary[:35]}\n"
+            elif not current:
+                text += "\n✅ Нет ближайших событий (8ч)\n"
         else:
-            await event.answer(f"❌ {message}", alert=True)
+            error = status.get('error', 'Неизвестная ошибка')
+            text = f"❌ **Ошибка подключения**\n\n{error}"
+
+        await event.edit(text, buttons=[[Button.inline("« Назад", b"calendar")]])
 
     @bot.on(events.CallbackQuery(data=b"calendar_setup"))
     async def calendar_setup_menu(event):
