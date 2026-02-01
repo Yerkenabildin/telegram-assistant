@@ -619,15 +619,10 @@ def register_handlers(client, bot=None):
         if getattr(sender, 'bot', False):
             return
 
-        # Check if user is "online" (has available/work emoji)
+        # Check if user is "online" (has available/work/meeting emoji)
         me = await client.get_me()
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
         is_online = not _mention_service.should_notify(emoji_status_id)
-
-        # For private messages, only notify when offline
-        if is_online:
-            logger.debug("User is online, skipping private message notification")
-            return
 
         # Get sender info
         sender_name = _get_display_name(sender)
@@ -675,9 +670,12 @@ def register_handlers(client, bot=None):
             message_text=message_text
         )
 
-        # Send notification via bot (preferred) or user client (fallback)
+        # Send notification:
+        # - Online (work/meeting emoji) → via bot
+        # - Offline → via user client
         try:
-            if _bot_client:
+            if is_online and _bot_client:
+                # User is online, send via bot
                 from bot_handlers import get_owner_id
                 owner_id = get_owner_id()
                 if owner_id:
@@ -686,23 +684,17 @@ def register_handlers(client, bot=None):
                         notification,
                         silent=not is_urgent
                     )
-                    logger.info(f"Private message notification sent via bot (urgent={is_urgent})")
+                    logger.info(f"Private message notification sent via bot (online, urgent={is_urgent})")
                 else:
-                    # Fallback to user client if owner_id not available
-                    await client.send_message(
-                        config.personal_tg_login,
-                        notification,
-                        silent=not is_urgent
-                    )
-                    logger.info(f"Private message notification sent via user client (urgent={is_urgent})")
+                    logger.warning("Bot owner_id not available, cannot send notification")
             else:
-                # No bot client, use user client
+                # User is offline, send via user client
                 await client.send_message(
                     config.personal_tg_login,
                     notification,
                     silent=not is_urgent
                 )
-                logger.info(f"Private message notification sent via user client (urgent={is_urgent})")
+                logger.info(f"Private message notification sent via user client (offline, urgent={is_urgent})")
 
             # Call webhook only if message contains ASAP
             if config.asap_webhook_url and 'asap' in message_text.lower():

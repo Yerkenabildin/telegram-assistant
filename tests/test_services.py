@@ -2954,30 +2954,35 @@ class TestPrivateMessageHandlerLogic:
 
         assert should_process is False
 
-    def test_skips_when_user_online(self):
-        """Test handler skips when user is online."""
+    def test_notifies_via_bot_when_user_online(self):
+        """Test handler notifies via bot when user is online."""
         is_private = True
         is_enabled = True
         is_bot = False
         message_text = "Hello"
-        is_online = True  # User has work emoji
+        is_online = True  # User has work/meeting emoji
+        bot_available = True
 
-        # User online = don't notify
-        should_notify = is_private and is_enabled and not is_bot and bool(message_text) and not is_online
-
-        assert should_notify is False
-
-    def test_notifies_when_user_offline(self):
-        """Test handler notifies when user is offline."""
-        is_private = True
-        is_enabled = True
-        is_bot = False
-        message_text = "Hello"
-        is_online = False  # User doesn't have work emoji
-
-        should_notify = is_private and is_enabled and not is_bot and bool(message_text) and not is_online
+        should_notify = is_private and is_enabled and not is_bot and bool(message_text)
+        send_via = "bot" if is_online and bot_available else "user_client"
 
         assert should_notify is True
+        assert send_via == "bot"
+
+    def test_notifies_via_user_client_when_offline(self):
+        """Test handler notifies via user client when user is offline."""
+        is_private = True
+        is_enabled = True
+        is_bot = False
+        message_text = "Hello"
+        is_online = False  # User doesn't have work/meeting emoji
+        bot_available = True
+
+        should_notify = is_private and is_enabled and not is_bot and bool(message_text)
+        send_via = "bot" if is_online and bot_available else "user_client"
+
+        assert should_notify is True
+        assert send_via == "user_client"
 
     def test_vip_sender_is_urgent(self):
         """Test VIP sender message is marked urgent."""
@@ -3039,42 +3044,43 @@ class TestPrivateMessageHandlerLogic:
 
 
 class TestPrivateMessageBotNotification:
-    """Tests for sending private message notifications via bot."""
+    """Tests for sending private message notifications via bot vs user client."""
 
-    def test_prefers_bot_when_available(self):
-        """Test notification is sent via bot when bot_client is available."""
+    def test_online_sends_via_bot(self):
+        """Test notification is sent via bot when user is online (work/meeting emoji)."""
+        is_online = True
         bot_client_available = True
-        owner_id = 123456789
 
-        if bot_client_available and owner_id:
+        if is_online and bot_client_available:
             send_via = "bot"
         else:
             send_via = "user_client"
 
         assert send_via == "bot"
 
-    def test_fallback_to_user_client_when_no_bot(self):
-        """Test notification falls back to user client when no bot."""
-        bot_client_available = False
-        owner_id = None
+    def test_offline_sends_via_user_client(self):
+        """Test notification is sent via user client when user is offline."""
+        is_online = False
+        bot_client_available = True
 
-        if bot_client_available and owner_id:
+        if is_online and bot_client_available:
             send_via = "bot"
         else:
             send_via = "user_client"
 
         assert send_via == "user_client"
 
-    def test_fallback_to_user_client_when_no_owner_id(self):
-        """Test notification falls back to user client when no owner_id."""
-        bot_client_available = True
-        owner_id = None
+    def test_online_without_bot_skips(self):
+        """Test notification is skipped when online but no bot available."""
+        is_online = True
+        bot_client_available = False
 
-        if bot_client_available and owner_id:
+        if is_online and bot_client_available:
             send_via = "bot"
         else:
             send_via = "user_client"
 
+        # When online but no bot, falls back to user_client
         assert send_via == "user_client"
 
 

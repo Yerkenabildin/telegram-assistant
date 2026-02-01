@@ -480,7 +480,7 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
 
 ## Private Message Notifications
 
-The bot can send notifications about incoming private messages when user is offline.
+The bot can send notifications about incoming private messages with context.
 
 ### Flow
 ```
@@ -491,15 +491,16 @@ Incoming private message:
 │  └─ Yes → Exit
 ├─ Check: Is message empty (sticker, media only)?
 │  └─ Yes → Exit
-├─ Determine online status (has work/available emoji?)
-├─ If online → Skip notification
+├─ Determine online status (has work/meeting emoji?)
 ├─ Fetch recent messages from conversation for context
 ├─ Generate summary (AI or keyword-based)
 ├─ Check urgency:
 │  ├─ VIP sender → Always urgent
 │  ├─ AI detection (if Yandex GPT configured)
 │  └─ Keyword-based detection
-└─ Send notification via user client to PERSONAL_TG_LOGIN
+└─ Send notification:
+   ├─ Online (work/meeting emoji) → via bot
+   └─ Offline → via user client to PERSONAL_TG_LOGIN
 ```
 
 ### Notification Format
