@@ -351,6 +351,16 @@ def register_handlers(client, bot=None):
         if not event.is_private:
             return
 
+        # Check if ASAP notifications are enabled in settings
+        if not Settings.is_asap_enabled():
+            return
+
+        # Check if personal chat is configured
+        personal_chat_id = Settings.get_personal_chat_id()
+        if not personal_chat_id and not config.personal_tg_login:
+            logger.debug("ASAP notification skipped: no personal chat configured")
+            return
+
         sender = await event.get_sender()
         if getattr(sender, 'bot', False):
             return
@@ -369,20 +379,24 @@ def register_handlers(client, bot=None):
         sender_id = getattr(sender, 'id', 0)
 
         # Send notification to personal account
+        # Prefer Settings personal_chat_id, fallback to config.personal_tg_login
+        notification_target = personal_chat_id or config.personal_tg_login
         notification_message = _notification_service.format_asap_message(sender_username, sender_id)
         await client.send_message(
-            config.personal_tg_login,
+            notification_target,
             notification_message,
             formatting_entities=[MessageEntityCustomEmoji(offset=0, length=2, document_id=5379748062124056162)]
         )
         logger.info(f"ASAP notification sent for message from {sender_username or sender_id}")
 
-        # Call webhook if configured
-        if config.asap_webhook_url:
+        # Call webhook if configured (prefer Settings, fallback to config)
+        webhook_url = Settings.get_asap_webhook_url() or config.asap_webhook_url
+        if webhook_url:
             await _notification_service.call_webhook(
                 sender_username=sender_username,
                 sender_id=sender_id,
-                message_text=event.message.text or ''
+                message_text=event.message.text or '',
+                webhook_url=webhook_url
             )
 
         await _send_reaction(client, event, '\U0001fae1')  # 🫡

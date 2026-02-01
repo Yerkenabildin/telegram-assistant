@@ -100,7 +100,8 @@ class NotificationService:
         self,
         sender_username: Optional[str],
         sender_id: int,
-        message_text: str
+        message_text: str,
+        webhook_url: Optional[str] = None
     ) -> bool:
         """
         Call the configured webhook with notification data.
@@ -109,11 +110,13 @@ class NotificationService:
             sender_username: Sender's username
             sender_id: Sender's numeric ID
             message_text: The message content
+            webhook_url: Optional webhook URL to use (overrides instance default)
 
         Returns:
             True if webhook call succeeded
         """
-        if not self.webhook_url:
+        url = webhook_url or self.webhook_url
+        if not url:
             return False
 
         # Format sender name
@@ -134,15 +137,15 @@ class NotificationService:
         try:
             timeout = aiohttp.ClientTimeout(total=self.webhook_timeout)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self.webhook_url, json=payload) as response:
+                async with session.post(url, json=payload) as response:
                     success = response.status == 200
                     logger.info(
-                        f"Webhook POST to {self.webhook_url}: "
+                        f"Webhook POST to {url}: "
                         f"status={response.status}, success={success}"
                     )
                     return success
         except asyncio.TimeoutError:
-            logger.error(f"Webhook timeout after {self.webhook_timeout}s: {self.webhook_url}")
+            logger.error(f"Webhook timeout after {self.webhook_timeout}s: {url}")
             return False
         except Exception as e:
             logger.error(f"Webhook call failed: {e}")
