@@ -178,6 +178,7 @@ def get_main_menu_keyboard():
         [Button.inline("📅 Расписание статусов", b"schedule")],
         [Button.inline("📝 Автоответы", b"replies")],
         [Button.inline("🔔 Контекст призыва", b"mentions")],
+        [Button.inline("📊 Продуктивность", b"productivity")],
         [Button.inline("⚙️ Настройки", b"settings")],
     ]
 
@@ -318,6 +319,27 @@ def get_mentions_keyboard():
         [Button.inline("📴 Во время отсутствия", b"mention_offline")],
         [Button.inline("📱 Во время онлайн", b"mention_online")],
         [Button.inline("⭐ Приоритетные", b"mention_vip")],
+        [Button.inline("« Назад", b"main")],
+    ]
+
+
+def get_productivity_keyboard():
+    """Productivity summary configuration keyboard."""
+    is_enabled = Settings.is_productivity_summary_enabled()
+    toggle_text = "🟢 Автоотправка включена" if is_enabled else "🔴 Автоотправка выключена"
+    toggle_data = b"productivity_off" if is_enabled else b"productivity_on"
+
+    summary_time = Settings.get_productivity_summary_time()
+    time_text = f"⏰ Время: {summary_time}" if summary_time else "⏰ Время не настроено"
+
+    extra_count = len(Settings.get_productivity_extra_chats())
+    extra_text = f"➕ Доп. чаты ({extra_count})" if extra_count > 0 else "➕ Добавить чаты"
+
+    return [
+        [Button.inline("📊 Получить сводку сейчас", b"productivity_now")],
+        [Button.inline(toggle_text, toggle_data)],
+        [Button.inline(time_text, b"productivity_time")],
+        [Button.inline(extra_text, b"productivity_chats")],
         [Button.inline("« Назад", b"main")],
     ]
 
@@ -1824,6 +1846,106 @@ def register_bot_handlers(bot, user_client=None):
                 )
             return
 
+        # Check if user is setting productivity summary time
+        if event.sender_id in _pending_productivity_time:
+            text = event.message.text.strip() if event.message.text else ""
+            if text:
+                # Validate time format HH:MM
+                import re
+                match = re.match(r'^(\d{1,2}):(\d{2})$', text)
+                if match:
+                    hour = int(match.group(1))
+                    minute = int(match.group(2))
+                    if 0 <= hour <= 23 and 0 <= minute <= 59:
+                        time_str = f"{hour:02d}:{minute:02d}"
+                        Settings.set_productivity_summary_time(time_str)
+                        _pending_productivity_time.discard(event.sender_id)
+                        logger.info(f"Productivity summary time set to {time_str}")
+
+                        await event.respond(
+                            f"✅ Время сводки установлено: {time_str}",
+                            buttons=get_productivity_keyboard()
+                        )
+                        return
+
+                await event.respond(
+                    "❌ Неверный формат времени.\n\n"
+                    "Введите время в формате **ЧЧ:ММ**\n"
+                    "Например: `19:00` или `9:30`",
+                    buttons=[[Button.inline("❌ Отмена", b"productivity_time_cancel")]]
+                )
+            return
+
+        # Check if user is adding productivity extra chat
+        if event.sender_id in _pending_productivity_chat:
+            # Check if message is forwarded
+            fwd = event.message.fwd_from
+            if fwd and hasattr(fwd, 'from_id') and fwd.from_id:
+                # Get chat ID from forwarded message
+                from_id = fwd.from_id
+                if hasattr(from_id, 'channel_id'):
+                    chat_id = int(f"-100{from_id.channel_id}")
+                elif hasattr(from_id, 'chat_id'):
+                    chat_id = -from_id.chat_id
+                else:
+                    await event.respond(
+                        "❌ Не удалось определить ID чата.\n"
+                        "Попробуйте ввести ID вручную.",
+                        buttons=[[Button.inline("❌ Отмена", b"productivity_chat_add_cancel")]]
+                    )
+                    return
+
+                # Try to get chat name
+                try:
+                    chat_entity = await _user_client.get_entity(chat_id)
+                    chat_title = getattr(chat_entity, 'title', None) or str(chat_id)
+                except Exception:
+                    chat_title = str(chat_id)
+
+                Settings.add_productivity_extra_chat(chat_id)
+                _pending_productivity_chat.discard(event.sender_id)
+                logger.info(f"Productivity extra chat added: {chat_id} ({chat_title})")
+
+                await event.respond(
+                    f"✅ Чат добавлен!\n\n{chat_title}",
+                    buttons=get_productivity_keyboard()
+                )
+                return
+
+            # Try to parse chat ID from text
+            text = event.message.text.strip() if event.message.text else ""
+            if text:
+                try:
+                    chat_id = int(text)
+                    # Try to get chat name
+                    try:
+                        chat_entity = await _user_client.get_entity(chat_id)
+                        chat_title = getattr(chat_entity, 'title', None) or str(chat_id)
+                    except Exception:
+                        chat_title = str(chat_id)
+
+                    Settings.add_productivity_extra_chat(chat_id)
+                    _pending_productivity_chat.discard(event.sender_id)
+                    logger.info(f"Productivity extra chat added: {chat_id} ({chat_title})")
+
+                    await event.respond(
+                        f"✅ Чат добавлен!\n\n{chat_title}",
+                        buttons=get_productivity_keyboard()
+                    )
+                except ValueError:
+                    await event.respond(
+                        "❌ Перешлите сообщение из чата\n"
+                        "или введите числовой ID.",
+                        buttons=[[Button.inline("❌ Отмена", b"productivity_chat_add_cancel")]]
+                    )
+            else:
+                await event.respond(
+                    "❌ Перешлите сообщение из чата\n"
+                    "или введите числовой ID.",
+                    buttons=[[Button.inline("❌ Отмена", b"productivity_chat_add_cancel")]]
+                )
+            return
+
         # Check if user is editing work schedule (time or emoji)
         if event.sender_id in _pending_work_time_edit:
             entities = event.message.entities or []
@@ -2388,6 +2510,7 @@ def register_bot_handlers(bot, user_client=None):
     # Store users waiting to input VIP username/chat
     _pending_vip_user: set[int] = set()
     _pending_vip_chat: set[int] = set()
+    _pending_productivity_time: set[int] = set()
 
     @bot.on(events.CallbackQuery(data=b"vip_add_user"))
     async def vip_add_user_start(event):
@@ -2460,5 +2583,214 @@ def register_bot_handlers(bot, user_client=None):
 
         # Refresh the appropriate menu
         await mention_vip_menu(event)
+
+    # =========================================================================
+    # Productivity Summary Menu
+    # =========================================================================
+
+    @bot.on(events.CallbackQuery(data=b"productivity"))
+    async def productivity_menu(event):
+        """Show productivity summary configuration menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        is_enabled = Settings.is_productivity_summary_enabled()
+        summary_time = Settings.get_productivity_summary_time()
+
+        status = "✅ включена" if is_enabled else "❌ выключена"
+        time_info = f"⏰ Время: {summary_time}" if summary_time else "⏰ Время не настроено"
+
+        text = (
+            "📊 **Сводка продуктивности**\n\n"
+            "Ежедневный отчёт о ваших переписках:\n"
+            "• Сколько чатов и сообщений\n"
+            "• Краткое саммари по каждому чату\n"
+            "• Общие выводы о дне\n\n"
+            f"Автоотправка: {status}\n"
+            f"{time_info}"
+        )
+
+        await event.edit(text, buttons=get_productivity_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"productivity_now"))
+    async def productivity_generate_now(event):
+        """Generate productivity summary right now."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        await event.answer("⏳ Генерирую сводку...", alert=False)
+
+        try:
+            from services.productivity_service import get_productivity_service
+            from services.yandex_gpt_service import get_yandex_gpt_service
+
+            service = get_productivity_service()
+            gpt_service = get_yandex_gpt_service()
+
+            # Get extra chat IDs for muted chats user wants to include
+            # Combine permanent extra chats + temporary chats (from mentions/replies)
+            extra_chat_ids = Settings.get_productivity_extra_chats()
+            temp_chat_ids = Settings.get_productivity_temp_chats()
+            all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
+
+            # Collect messages (this may take a while)
+            daily = await service.collect_daily_messages(
+                _user_client, extra_chat_ids=all_extra_chats
+            )
+            summary_text = await service.generate_daily_summary(daily, gpt_service)
+
+            # Clear temporary chats after summary is generated
+            Settings.clear_productivity_temp_chats()
+            if temp_chat_ids:
+                logger.info(f"Cleared {len(temp_chat_ids)} temporary productivity chats")
+
+            # Send as a new message
+            await event.respond(summary_text)
+            logger.info("Productivity summary generated on demand via bot")
+
+        except Exception as e:
+            logger.error(f"Failed to generate productivity summary: {e}")
+            await event.respond(f"❌ Ошибка генерации сводки:\n{e}")
+
+    @bot.on(events.CallbackQuery(data=b"productivity_on"))
+    async def productivity_enable(event):
+        """Enable automatic productivity summary."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        # Check if time is set
+        summary_time = Settings.get_productivity_summary_time()
+        if not summary_time:
+            await event.answer("⚠️ Сначала настройте время", alert=True)
+            return
+
+        Settings.set_productivity_summary_enabled(True)
+        logger.info("Productivity summary enabled via bot")
+        await event.answer("✅ Автоотправка включена")
+        await productivity_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"productivity_off"))
+    async def productivity_disable(event):
+        """Disable automatic productivity summary."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_productivity_summary_enabled(False)
+        logger.info("Productivity summary disabled via bot")
+        await event.answer("🔴 Автоотправка выключена")
+        await productivity_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"productivity_time"))
+    async def productivity_time_start(event):
+        """Start setting productivity summary time."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_productivity_time.add(event.sender_id)
+
+        current = Settings.get_productivity_summary_time()
+        hint = f"\n\nТекущее время: {current}" if current else ""
+
+        await event.edit(
+            f"⏰ **Настройка времени**\n\n"
+            f"Отправьте время для ежедневной сводки\n"
+            f"в формате **ЧЧ:ММ** (например, 19:00).{hint}",
+            buttons=[[Button.inline("❌ Отмена", b"productivity_time_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"productivity_time_cancel"))
+    async def productivity_time_cancel(event):
+        """Cancel time setting."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_productivity_time.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await productivity_menu(event)
+
+    # State for pending chat addition
+    _pending_productivity_chat: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"productivity_chats"))
+    async def productivity_chats_menu(event):
+        """Show productivity extra chats menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        extra_chats = Settings.get_productivity_extra_chats()
+
+        lines = [
+            "➕ **Дополнительные чаты**\n",
+            "По умолчанию учитываются только незамьюченные чаты.",
+            "Здесь можно добавить замьюченные чаты, которые тоже нужно включить.\n"
+        ]
+
+        if extra_chats:
+            lines.append("**Добавленные чаты:**")
+            for chat_id in extra_chats[:10]:
+                try:
+                    entity = await _user_client.get_entity(chat_id)
+                    title = getattr(entity, 'title', None) or getattr(entity, 'first_name', str(chat_id))
+                    lines.append(f"• {title}")
+                except Exception:
+                    lines.append(f"• ID: {chat_id}")
+        else:
+            lines.append("_Дополнительные чаты не добавлены_")
+
+        buttons = [
+            [Button.inline("➕ Добавить чат", b"productivity_chat_add")],
+        ]
+        if extra_chats:
+            buttons.append([Button.inline("🗑 Очистить все", b"productivity_chat_clear")])
+        buttons.append([Button.inline("« Назад", b"productivity")])
+
+        await event.edit("\n".join(lines), buttons=buttons)
+
+    @bot.on(events.CallbackQuery(data=b"productivity_chat_add"))
+    async def productivity_chat_add_start(event):
+        """Start adding productivity chat."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_productivity_chat.add(event.sender_id)
+
+        await event.edit(
+            "➕ **Добавить чат**\n\n"
+            "Перешлите любое сообщение из чата,\n"
+            "который хотите добавить в сводку.\n\n"
+            "Или отправьте ID чата вручную.",
+            buttons=[[Button.inline("❌ Отмена", b"productivity_chat_add_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"productivity_chat_add_cancel"))
+    async def productivity_chat_add_cancel(event):
+        """Cancel adding productivity chat."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_productivity_chat.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await productivity_chats_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"productivity_chat_clear"))
+    async def productivity_chat_clear(event):
+        """Clear all productivity extra chats."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set('productivity_extra_chats', '')
+        logger.info("Productivity extra chats cleared")
+        await event.answer("✅ Список очищен")
+        await productivity_chats_menu(event)
 
     # Handle VIP input in handle_private_message - need to add check there

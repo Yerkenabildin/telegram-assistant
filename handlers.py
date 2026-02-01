@@ -388,6 +388,39 @@ def register_handlers(client, bot=None):
         await _send_reaction(client, event, '\U0001fae1')  # 🫡
 
     @client.on(events.NewMessage(incoming=True))
+    async def reply_to_my_message_handler(event):
+        """Track replies to user's messages for productivity summary."""
+        # Only group chats
+        if event.is_private:
+            return
+
+        # Check if this is a reply to some message
+        reply_to_id = getattr(event.message, 'reply_to_msg_id', None)
+        if not reply_to_id:
+            # Also check nested reply_to structure
+            reply_to = getattr(event.message, 'reply_to', None)
+            if reply_to:
+                reply_to_id = getattr(reply_to, 'reply_to_msg_id', None)
+
+        if not reply_to_id:
+            return
+
+        # Get the original message being replied to
+        try:
+            original_msg = await client.get_messages(event.chat_id, ids=reply_to_id)
+            if not original_msg:
+                return
+
+            # Check if the original message was sent by me
+            me = await client.get_me()
+            if original_msg.sender_id == me.id:
+                # Someone replied to my message - add to productivity temp chats
+                Settings.add_productivity_temp_chat(event.chat_id)
+                logger.debug(f"Added chat {event.chat_id} to productivity temp list (reply to my message)")
+        except Exception as e:
+            logger.debug(f"Could not check reply origin: {e}")
+
+    @client.on(events.NewMessage(incoming=True))
     async def group_mention_handler(event):
         """Handle mentions in group chats - notify both when online and offline."""
         # Only group chats (not private)
@@ -426,6 +459,10 @@ def register_handlers(client, bot=None):
         sender_username = getattr(sender, 'username', None)
 
         logger.info(f"Mention detected in '{chat_title}' from {sender_name} (online={is_online})")
+
+        # Add chat to temporary productivity list (will be cleared after daily summary)
+        Settings.add_productivity_temp_chat(event.chat_id)
+        logger.debug(f"Added chat {event.chat_id} to productivity temp list (mention)")
 
         # Use context extraction service for smart context fetching
         context_service = get_context_extraction_service()
