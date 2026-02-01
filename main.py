@@ -21,6 +21,7 @@ from models import Reply, Settings, Schedule, VipList
 from routes import register_routes
 from handlers import register_handlers
 from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username, set_bot_username
+from services.caldav_service import caldav_service
 from telethon.tl.functions.account import UpdateEmojiStatusRequest
 from telethon.tl.types import EmojiStatus
 
@@ -277,6 +278,99 @@ async def productivity_summary_scheduler():
 
 
 # =============================================================================
+# Calendar Checker
+# =============================================================================
+
+async def calendar_checker():
+    """Background task that monitors CalDAV calendar for meetings."""
+    logger.info("Starting calendar checker...")
+
+    # Wait for client to be authorized
+    while not await client.is_user_authorized():
+        await asyncio.sleep(5)
+
+    logger.info("Calendar checker active")
+
+    # Track if we started a meeting from calendar
+    calendar_meeting_active = False
+
+    while True:
+        try:
+            await asyncio.sleep(config.caldav_check_interval)
+
+            # Check if CalDAV is configured and calendar sync is enabled
+            if not Settings.is_caldav_configured() or not Settings.is_calendar_sync_enabled():
+                if calendar_meeting_active:
+                    # End meeting if we started it and sync got disabled
+                    logger.info("Calendar sync disabled, ending calendar-triggered meeting")
+                    Schedule.end_meeting()
+                    # Restore scheduled emoji
+                    scheduled_emoji_id = Schedule.get_current_emoji_id()
+                    if scheduled_emoji_id:
+                        try:
+                            await client(UpdateEmojiStatusRequest(
+                                emoji_status=EmojiStatus(document_id=scheduled_emoji_id)
+                            ))
+                        except Exception as e:
+                            logger.error(f"Failed to restore emoji status: {e}")
+                    calendar_meeting_active = False
+                continue
+
+            # Get emoji to use for meetings (same as Meeting API)
+            meeting_emoji = Settings.get('meeting_emoji_id')
+            if not meeting_emoji:
+                # No meeting emoji configured - skip
+                continue
+
+            # Check for active meeting
+            is_meeting, event = await caldav_service.check_meeting_status()
+
+            if is_meeting and not calendar_meeting_active:
+                # Meeting started - activate meeting status
+                logger.info(f"Calendar event started: {event.summary}")
+                Schedule.start_meeting(meeting_emoji)
+
+                # Update emoji status immediately
+                try:
+                    await client(UpdateEmojiStatusRequest(
+                        emoji_status=EmojiStatus(document_id=int(meeting_emoji))
+                    ))
+                    logger.info(f"Meeting status activated for: {event.summary}")
+                except Exception as e:
+                    logger.error(f"Failed to update emoji status: {e}")
+
+                calendar_meeting_active = True
+
+            elif not is_meeting and calendar_meeting_active:
+                # Meeting ended - restore scheduled emoji
+                logger.info("Calendar event ended, restoring schedule")
+                Schedule.end_meeting()
+
+                # Get and apply scheduled emoji
+                scheduled_emoji_id = Schedule.get_current_emoji_id()
+                if scheduled_emoji_id:
+                    try:
+                        await client(UpdateEmojiStatusRequest(
+                            emoji_status=EmojiStatus(document_id=scheduled_emoji_id)
+                        ))
+                        logger.info(f"Restored scheduled emoji: {scheduled_emoji_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to restore emoji status: {e}")
+
+                calendar_meeting_active = False
+
+        except asyncio.CancelledError:
+            logger.info("Calendar checker stopped")
+            # Clean up if we have an active meeting
+            if calendar_meeting_active:
+                Schedule.end_meeting()
+            break
+        except Exception as e:
+            logger.error(f"Calendar checker error: {e}")
+            await asyncio.sleep(60)  # Wait before retrying on error
+
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -305,6 +399,9 @@ async def run_telethon():
 
     # Start productivity summary scheduler
     asyncio.create_task(productivity_summary_scheduler())
+
+    # Start calendar checker as a background task
+    asyncio.create_task(calendar_checker())
 
     # Start background task to detect when auth is complete
     asyncio.create_task(_wait_for_auth())
@@ -444,6 +541,7 @@ if __name__ == '__main__':
     logger.info(f"Bot: {'enabled' if config.bot_token else 'disabled'}")
     if config.allowed_username:
         logger.info(f"Allowed username: @{config.allowed_username}")
+    logger.info(f"CalDAV: {'configured' if caldav_service.is_configured() else 'not configured'}")
     logger.info("==========================")
 
     try:

@@ -386,6 +386,21 @@ class Settings(Model):
         """Clear all temporary chats after summary generation."""
         Settings.set('productivity_temp_chats', '')
 
+    # =========================================================================
+    # CalDAV Calendar Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_calendar_sync_enabled() -> bool:
+        """Check if calendar sync is enabled (default: True if CalDAV configured)."""
+        value = Settings.get('calendar_sync_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_calendar_sync_enabled(enabled: bool) -> None:
+        """Enable or disable calendar sync."""
+        Settings.set('calendar_sync_enabled', 'true' if enabled else 'false')
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""

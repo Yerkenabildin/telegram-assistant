@@ -120,6 +120,12 @@ class Config:
         default_factory=lambda: os.environ.get('PRODUCTIVITY_SUMMARY_TIME') or None
     )
 
+    # CalDAV calendar integration settings
+    # How often to check calendar (in seconds, default: 60)
+    caldav_check_interval: int = field(
+        default_factory=lambda: int(os.environ.get('CALDAV_CHECK_INTERVAL', '60'))
+    )
+
     def validate(self) -> list[str]:
         """Validate required configuration. Returns list of error messages."""
         errors = []

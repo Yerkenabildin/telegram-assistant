@@ -71,6 +71,7 @@ from sqlitemodel import SQL
 from config import config
 from logging_config import logger
 from models import Reply, Settings, Schedule, VipList, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
+from services.caldav_service import caldav_service
 
 
 # =============================================================================
@@ -174,13 +175,20 @@ def get_auth_cancel_keyboard():
 
 def get_main_menu_keyboard():
     """Main menu keyboard."""
-    return [
+    buttons = [
         [Button.inline("📅 Расписание статусов", b"schedule")],
         [Button.inline("📝 Автоответы", b"replies")],
         [Button.inline("🔔 Контекст призыва", b"mentions")],
         [Button.inline("📊 Продуктивность", b"productivity")],
-        [Button.inline("⚙️ Настройки", b"settings")],
     ]
+
+    # Show calendar button if CalDAV is configured
+    if Settings.is_caldav_configured():
+        buttons.append([Button.inline("📆 Календарь", b"calendar")])
+
+    buttons.append([Button.inline("⚙️ Настройки", b"settings")])
+
+    return buttons
 
 
 def get_back_keyboard():
@@ -309,6 +317,22 @@ def get_settings_keyboard():
     """Settings keyboard."""
     return [
         [Button.inline("🚪 Выйти из аккаунта", b"logout_confirm")],
+        [Button.inline("« Назад", b"main")],
+    ]
+
+
+def get_calendar_keyboard():
+    """Calendar sync management keyboard."""
+    is_enabled = Settings.is_calendar_sync_enabled()
+    toggle_text = "🟢 Синхронизация вкл" if is_enabled else "🔴 Синхронизация выкл"
+    toggle_data = b"calendar_off" if is_enabled else b"calendar_on"
+
+    calendar_emoji = Settings.get_calendar_meeting_emoji()
+    emoji_text = "🎨 Emoji для встреч ✓" if calendar_emoji else "🎨 Emoji для встреч"
+
+    return [
+        [Button.inline(toggle_text, toggle_data)],
+        [Button.inline(emoji_text, b"calendar_emoji")],
         [Button.inline("« Назад", b"main")],
     ]
 
@@ -1403,6 +1427,98 @@ def register_bot_handlers(bot, user_client=None):
         await meeting_menu(event)
 
     # =========================================================================
+    # Calendar
+    # =========================================================================
+
+    # Pending calendar emoji setup
+    _pending_calendar_emoji: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"calendar"))
+    async def calendar_menu(event):
+        """Show calendar sync menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        is_enabled = Settings.is_calendar_sync_enabled()
+        calendar_emoji = Settings.get_calendar_meeting_emoji()
+
+        status = "🟢 Включена" if is_enabled else "🔴 Выключена"
+        emoji_info = f"`{calendar_emoji}`" if calendar_emoji else "не настроен"
+
+        text = (
+            "📆 **Синхронизация с календарём**\n\n"
+            f"**Статус:** {status}\n"
+            f"**Emoji для встреч:** {emoji_info}\n\n"
+            "При начале события в календаре автоматически "
+            "включается статус встречи. После окончания — "
+            "восстанавливается расписание."
+        )
+
+        if config.caldav_calendar_name:
+            text += f"\n\n**Календарь:** {config.caldav_calendar_name}"
+
+        await event.edit(text, buttons=get_calendar_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"calendar_on"))
+    async def calendar_enable(event):
+        """Enable calendar sync."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_calendar_sync_enabled(True)
+        logger.info("Calendar sync enabled via bot")
+
+        await event.answer("🟢 Синхронизация включена")
+        await calendar_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"calendar_off"))
+    async def calendar_disable(event):
+        """Disable calendar sync."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_calendar_sync_enabled(False)
+        logger.info("Calendar sync disabled via bot")
+
+        await event.answer("🔴 Синхронизация выключена")
+        await calendar_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"calendar_emoji"))
+    async def calendar_emoji_start(event):
+        """Start setting calendar meeting emoji."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        current_emoji = Settings.get_calendar_meeting_emoji()
+        current_info = f"\n\nТекущий emoji: `{current_emoji}`" if current_emoji else ""
+
+        _pending_calendar_emoji.add(event.sender_id)
+
+        await event.edit(
+            "🎨 **Emoji для событий календаря**\n\n"
+            "Отправьте кастомный emoji, который будет "
+            "устанавливаться во время событий из календаря."
+            f"{current_info}",
+            buttons=[
+                [Button.inline("❌ Отмена", b"calendar_emoji_cancel")],
+            ]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"calendar_emoji_cancel"))
+    async def calendar_emoji_cancel(event):
+        """Cancel calendar emoji setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_calendar_emoji.discard(event.sender_id)
+        await calendar_menu(event)
+
+    # =========================================================================
     # Settings
     # =========================================================================
 
@@ -2137,6 +2253,30 @@ def register_bot_handlers(bot, user_client=None):
             await event.respond(
                 f"✅ Эмодзи по умолчанию установлен!",
                 buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting calendar meeting emoji
+        if event.sender_id in _pending_calendar_emoji:
+            entities = event.message.entities or []
+            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+
+            if not custom_emojis:
+                await event.respond(
+                    "❌ Отправьте сообщение с кастомным эмодзи.",
+                    buttons=[[Button.inline("❌ Отмена", b"calendar_emoji_cancel")]]
+                )
+                return
+
+            emoji_id = custom_emojis[0].document_id
+
+            Settings.set_calendar_meeting_emoji(str(emoji_id))
+            _pending_calendar_emoji.discard(event.sender_id)
+            logger.info(f"Calendar meeting emoji set to {emoji_id}")
+
+            await event.respond(
+                f"✅ Emoji для событий календаря установлен!",
+                buttons=get_calendar_keyboard()
             )
             return
 
