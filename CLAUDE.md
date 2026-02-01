@@ -480,7 +480,7 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
 
 ## Private Message Notifications
 
-The bot can send notifications about incoming private messages with context.
+The bot can send notifications about incoming private messages from VIP senders with context.
 
 ### Flow
 ```
@@ -489,15 +489,13 @@ Incoming private message:
 │  └─ No → Exit
 ├─ Check: Is sender a bot?
 │  └─ Yes → Exit
+├─ Check: Is sender a VIP?
+│  └─ No → Exit (only VIP senders trigger notifications)
 ├─ Check: Is message empty (sticker, media only)?
 │  └─ Yes → Exit
 ├─ Determine online status (has work/meeting emoji?)
 ├─ Fetch recent messages from conversation for context
 ├─ Generate summary (AI or keyword-based)
-├─ Check urgency:
-│  ├─ VIP sender → Always urgent
-│  ├─ AI detection (if Yandex GPT configured)
-│  └─ Keyword-based detection
 └─ Send notification:
    ├─ Online (work/meeting emoji) → via bot
    └─ Offline → via user client to PERSONAL_TG_LOGIN

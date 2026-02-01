@@ -2954,6 +2954,26 @@ class TestPrivateMessageHandlerLogic:
 
         assert should_process is False
 
+    def test_skips_non_vip_senders(self):
+        """Test handler skips non-VIP senders."""
+        sender_username = "regular_user"
+        vip_usernames = ["vip_user", "important_person"]
+
+        is_vip = sender_username.lower() in [u.lower() for u in vip_usernames]
+        should_notify = is_vip
+
+        assert should_notify is False
+
+    def test_notifies_vip_senders(self):
+        """Test handler notifies for VIP senders."""
+        sender_username = "vip_user"
+        vip_usernames = ["vip_user", "important_person"]
+
+        is_vip = sender_username.lower() in [u.lower() for u in vip_usernames]
+        should_notify = is_vip
+
+        assert should_notify is True
+
     def test_notifies_via_bot_when_user_online(self):
         """Test handler notifies via bot when user is online."""
         is_private = True

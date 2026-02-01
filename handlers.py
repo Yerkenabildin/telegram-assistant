@@ -629,11 +629,15 @@ def register_handlers(client, bot=None):
         sender_username = getattr(sender, 'username', None)
         sender_id = getattr(sender, 'id', 0)
 
+        # Only notify for VIP senders
+        if not _mention_service.is_vip_sender(sender_username):
+            return
+
         message_text = event.message.text or ''
         if not message_text.strip():
             return  # Skip empty messages (stickers, media, etc.)
 
-        logger.info(f"Private message notification for message from {sender_name}")
+        logger.info(f"Private message notification for VIP message from {sender_name}")
 
         # Fetch recent messages for context
         try:
