@@ -328,11 +328,20 @@ def get_private_messages_keyboard():
     asap_toggle_text = "🟢 ASAP включен" if is_asap_enabled else "🔴 ASAP выключен"
     asap_toggle_data = b"asap_off" if is_asap_enabled else b"asap_on"
 
+    is_vip_as_asap = Settings.is_vip_as_asap_enabled()
+    vip_toggle_text = "🟢 VIP как ASAP" if is_vip_as_asap else "🔴 VIP как ASAP"
+    vip_toggle_data = b"vip_asap_off" if is_vip_as_asap else b"vip_asap_on"
+
+    cooldown = Settings.get_asap_cooldown_minutes()
+    cooldown_text = f"⏱ Кулдаун: {cooldown} мин"
+
     webhook_url = Settings.get_asap_webhook_url()
     webhook_text = "🔗 Webhook ✓" if webhook_url else "🔗 Webhook"
 
     return [
         [Button.inline(asap_toggle_text, asap_toggle_data)],
+        [Button.inline(vip_toggle_text, vip_toggle_data)],
+        [Button.inline(cooldown_text, b"asap_cooldown")],
         [Button.inline(webhook_text, b"pm_webhook")],
         [Button.inline("« Назад", b"main")],
     ]
@@ -1998,12 +2007,21 @@ def register_bot_handlers(bot, user_client=None):
 
         webhook_url = Settings.get_asap_webhook_url()
         is_asap_enabled = Settings.is_asap_enabled()
+        is_vip_as_asap = Settings.is_vip_as_asap_enabled()
+        cooldown_minutes = Settings.get_asap_cooldown_minutes()
 
         text = "💬 **Приватные сообщения**\n\n"
 
         # ASAP status
         asap_status = "✅ включены" if is_asap_enabled else "❌ выключены"
         text += f"🚨 ASAP уведомления: {asap_status}\n"
+
+        # VIP as ASAP status
+        vip_status = "✅ включено" if is_vip_as_asap else "❌ выключено"
+        text += f"👑 VIP как ASAP: {vip_status}\n"
+
+        # Cooldown
+        text += f"⏱ Кулдаун: {cooldown_minutes} мин\n"
 
         # Webhook status
         if webhook_url:
@@ -2013,7 +2031,9 @@ def register_bot_handlers(bot, user_client=None):
         else:
             text += "🔗 Webhook: _не настроен_\n"
 
-        text += "\n_ASAP уведомления отправляются когда кто-то пишет вам в личку со словом ASAP._"
+        text += "\n_ASAP уведомления отправляются когда кто-то пишет вам в личку со словом ASAP._\n"
+        text += "_VIP как ASAP — уведомлять о любом сообщении от VIP-пользователей._\n"
+        text += "_Кулдаун — минимальный интервал между уведомлениями от одного отправителя._"
 
         await event.edit(text, buttons=get_private_messages_keyboard())
 
@@ -2096,6 +2116,66 @@ def register_bot_handlers(bot, user_client=None):
         Settings.set_asap_enabled(False)
         logger.info("ASAP notifications disabled")
         await event.answer("❌ ASAP уведомления выключены")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"vip_asap_on"))
+    async def vip_asap_enable(event):
+        """Enable VIP as ASAP notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_vip_as_asap_enabled(True)
+        logger.info("VIP as ASAP enabled")
+        await event.answer("✅ VIP как ASAP включено")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"vip_asap_off"))
+    async def vip_asap_disable(event):
+        """Disable VIP as ASAP notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_vip_as_asap_enabled(False)
+        logger.info("VIP as ASAP disabled")
+        await event.answer("❌ VIP как ASAP выключено")
+        await private_messages_menu(event)
+
+    # Pending state for cooldown input
+    _pending_asap_cooldown: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"asap_cooldown"))
+    async def asap_cooldown_start(event):
+        """Start setting ASAP cooldown."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_asap_cooldown.add(event.sender_id)
+
+        current = Settings.get_asap_cooldown_minutes()
+
+        await event.edit(
+            "⏱ **Кулдаун ASAP уведомлений**\n\n"
+            f"Текущее значение: **{current} мин**\n\n"
+            "Отправьте количество минут (1-1440).\n"
+            "Это минимальный интервал между уведомлениями\n"
+            "от одного отправителя.",
+            buttons=[
+                [Button.inline("❌ Отмена", b"asap_cooldown_cancel")]
+            ]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"asap_cooldown_cancel"))
+    async def asap_cooldown_cancel(event):
+        """Cancel cooldown setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_asap_cooldown.discard(event.sender_id)
+        await event.answer("❌ Отменено")
         await private_messages_menu(event)
 
     @bot.on(events.CallbackQuery(data=b"pm_webhook"))
@@ -2959,6 +3039,31 @@ def register_bot_handlers(bot, user_client=None):
 
             await event.respond(
                 "✅ Webhook URL сохранён!",
+                buttons=[[Button.inline("« Назад", b"private_messages")]]
+            )
+            return
+
+        # Check if user is setting ASAP cooldown
+        if event.sender_id in _pending_asap_cooldown:
+            text = event.message.text.strip() if event.message.text else ""
+
+            try:
+                minutes = int(text)
+                if minutes < 1 or minutes > 1440:
+                    raise ValueError("Out of range")
+            except ValueError:
+                await event.respond(
+                    "❌ Введите число от 1 до 1440",
+                    buttons=[[Button.inline("❌ Отмена", b"asap_cooldown_cancel")]]
+                )
+                return
+
+            Settings.set_asap_cooldown_minutes(minutes)
+            _pending_asap_cooldown.discard(event.sender_id)
+            logger.info(f"ASAP cooldown set to {minutes} minutes")
+
+            await event.respond(
+                f"✅ Кулдаун установлен: {minutes} мин",
                 buttons=[[Button.inline("« Назад", b"private_messages")]]
             )
             return

@@ -2,10 +2,11 @@
 Notification service for handling urgent message alerts.
 """
 from typing import Optional, Any
+from datetime import datetime, timedelta
 import aiohttp
 
 from logging_config import get_logger
-from models import Schedule
+from models import Schedule, Settings
 
 logger = get_logger('notification')
 
@@ -37,6 +38,45 @@ class NotificationService:
         self.personal_tg_login = personal_tg_login
         self.webhook_url = webhook_url
         self.webhook_timeout = webhook_timeout
+        # Track last ASAP notification time per sender_id
+        self._last_asap_notification: dict[int, datetime] = {}
+
+    def check_asap_cooldown(self, sender_id: int) -> bool:
+        """
+        Check if enough time has passed since last ASAP notification from this sender.
+
+        Args:
+            sender_id: Sender's numeric ID
+
+        Returns:
+            True if notification can be sent (cooldown passed or first notification)
+        """
+        cooldown_minutes = Settings.get_asap_cooldown_minutes()
+        now = datetime.now()
+
+        last_time = self._last_asap_notification.get(sender_id)
+        if last_time is None:
+            return True
+
+        time_diff = now - last_time
+        if time_diff < timedelta(minutes=cooldown_minutes):
+            logger.debug(
+                f"ASAP cooldown active for sender {sender_id}: "
+                f"{time_diff.total_seconds():.0f}s < {cooldown_minutes * 60}s"
+            )
+            return False
+
+        return True
+
+    def record_asap_notification(self, sender_id: int) -> None:
+        """
+        Record that an ASAP notification was sent for this sender.
+
+        Args:
+            sender_id: Sender's numeric ID
+        """
+        self._last_asap_notification[sender_id] = datetime.now()
+        logger.debug(f"Recorded ASAP notification for sender {sender_id}")
 
     def should_notify_asap(
         self,
