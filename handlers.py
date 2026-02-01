@@ -348,7 +348,7 @@ def register_handlers(client, bot=None):
     async def _send_asap_notification(
         event,
         sender,
-        sender_username: str | None,
+        sender_username: Optional[str],
         sender_id: int,
         is_vip: bool = False
     ) -> None:
