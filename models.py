@@ -5,7 +5,7 @@ Uses sqlitemodel ORM for SQLite persistence.
 """
 import json
 from datetime import datetime, date
-from typing import Optional, Any
+from typing import Optional, Any, List
 from zoneinfo import ZoneInfo
 
 from sqlitemodel import Model, Database, SQL
