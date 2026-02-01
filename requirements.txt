@@ -1,5 +1,6 @@
 # Core dependencies
 aiohttp==3.9.1
+caldav==1.3.9
 Hypercorn==0.16.0
 Quart==0.19.9
 sqlitemodel==0.1.3

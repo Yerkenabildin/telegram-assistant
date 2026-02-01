@@ -386,6 +386,114 @@ class Settings(Model):
         """Clear all temporary chats after summary generation."""
         Settings.set('productivity_temp_chats', '')
 
+    # =========================================================================
+    # CalDAV Calendar Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_calendar_sync_enabled() -> bool:
+        """Check if calendar sync is enabled (default: True if CalDAV configured)."""
+        value = Settings.get('calendar_sync_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_calendar_sync_enabled(enabled: bool) -> None:
+        """Enable or disable calendar sync."""
+        Settings.set('calendar_sync_enabled', 'true' if enabled else 'false')
+
+    @staticmethod
+    def get_caldav_url() -> Optional[str]:
+        """Get CalDAV server URL."""
+        return Settings.get('caldav_url')
+
+    @staticmethod
+    def set_caldav_url(url: Optional[str]) -> None:
+        """Set CalDAV server URL."""
+        if url is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_url'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_url', url)
+
+    @staticmethod
+    def get_caldav_username() -> Optional[str]:
+        """Get CalDAV username."""
+        return Settings.get('caldav_username')
+
+    @staticmethod
+    def set_caldav_username(username: Optional[str]) -> None:
+        """Set CalDAV username."""
+        if username is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_username'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_username', username)
+
+    @staticmethod
+    def get_caldav_password() -> Optional[str]:
+        """Get CalDAV password."""
+        return Settings.get('caldav_password')
+
+    @staticmethod
+    def set_caldav_password(password: Optional[str]) -> None:
+        """Set CalDAV password."""
+        if password is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_password'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_password', password)
+
+    @staticmethod
+    def get_caldav_calendars() -> list[str]:
+        """Get list of active CalDAV calendar names.
+
+        Returns empty list if not configured (meaning all calendars).
+        """
+        value = Settings.get('caldav_calendars')
+        if not value:
+            return []
+        return [c.strip() for c in value.split('|') if c.strip()]
+
+    @staticmethod
+    def set_caldav_calendars(calendars: list[str]) -> None:
+        """Set list of active CalDAV calendars."""
+        if not calendars:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_calendars'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_calendars', '|'.join(calendars))
+
+    @staticmethod
+    def add_caldav_calendar(name: str) -> None:
+        """Add a calendar to active list."""
+        name = name.strip()
+        calendars = Settings.get_caldav_calendars()
+        if name and name not in calendars:
+            calendars.append(name)
+            Settings.set_caldav_calendars(calendars)
+
+    @staticmethod
+    def remove_caldav_calendar(name: str) -> None:
+        """Remove a calendar from active list."""
+        name = name.strip()
+        calendars = Settings.get_caldav_calendars()
+        if name in calendars:
+            calendars.remove(name)
+            Settings.set_caldav_calendars(calendars)
+
+    @staticmethod
+    def is_caldav_configured() -> bool:
+        """Check if CalDAV is fully configured."""
+        return bool(
+            Settings.get_caldav_url() and
+            Settings.get_caldav_username() and
+            Settings.get_caldav_password()
+        )
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""

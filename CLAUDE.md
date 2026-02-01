@@ -67,6 +67,7 @@ The application runs up to three async services concurrently via `asyncio.gather
 | `services/mention_service.py` | Mention notification logic and formatting |
 | `services/yandex_gpt_service.py` | AI summarization with chunking support |
 | `services/productivity_service.py` | Daily productivity summary collection and generation |
+| `services/caldav_service.py` | CalDAV calendar integration for automatic meeting status |
 | `./storage/` | Persistent data directory (session file, database) |
 
 ### Module Dependencies
@@ -146,6 +147,7 @@ docker logs -f telegram-assistant
 | `VIP_USERNAMES` | NO | - | Comma-separated usernames whose mentions are always urgent |
 | `ONLINE_MENTION_DELAY_MINUTES` | NO | `10` | Delay before sending online notifications (skipped if message read) |
 | `PRODUCTIVITY_SUMMARY_TIME` | NO | - | Time for daily productivity summary (HH:MM format, e.g., `19:00`) |
+| `CALDAV_CHECK_INTERVAL` | NO | `60` | How often to check calendar (in seconds) |
 
 ## Event Handlers
 
@@ -196,6 +198,58 @@ curl -X POST "http://localhost:5050/api/meeting?action=start&token=your-token"
 ```
 
 Priority: Meeting (50) is above Work (10) but below Override (100), so vacation status won't be overwritten.
+
+## CalDAV Calendar Integration
+
+Automatically set meeting status based on calendar events. All configuration is done via bot interface.
+
+### Setup
+
+1. Open bot → **📆 Календарь** → **⚙️ Настроить CalDAV**
+
+2. Configure connection:
+   - **🌐 URL сервера** — CalDAV server URL
+   - **👤 Логин** — username (usually email)
+   - **🔑 Пароль** — password or app-specific password
+
+3. Set meeting emoji (used for both calendar and Meeting API):
+   - Bot → **📅 Расписание** → configure meeting emoji
+
+4. Test connection:
+   - Bot → **📆 Календарь** → **🔗 Проверить подключение**
+
+### How it works
+
+```
+Calendar event starts:
+├─ calendar_checker detects active event (checks every 60s)
+├─ Creates Schedule rule with PRIORITY_MEETING (50)
+├─ Updates Telegram emoji status immediately
+└─ Meeting status is active
+
+Calendar event ends:
+├─ calendar_checker detects no active event
+├─ Removes meeting Schedule rule
+├─ Restores scheduled emoji (work/weekend/rest)
+└─ Normal schedule resumes
+```
+
+### Features
+
+- **Bot configuration**: All settings are done via bot interface, no environment variables needed
+- **All-day events**: Supported, treated as 00:00-23:59
+- **Priority**: Calendar meetings use PRIORITY_MEETING (50)
+  - Higher than work schedule (10)
+  - Lower than manual overrides (100)
+- **Shared emoji**: Uses the same meeting emoji as Meeting API
+
+### Supported CalDAV servers
+
+- Yandex Calendar: `https://caldav.yandex.ru`
+- Google Calendar: `https://apidata.googleusercontent.com/caldav/v2` (requires app password)
+- iCloud: `https://caldav.icloud.com`
+- Nextcloud: `https://your-server.com/remote.php/dav/calendars/`
+- Any standard CalDAV server
 
 ## Bot Control Interface
 

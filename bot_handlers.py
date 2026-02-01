@@ -71,6 +71,7 @@ from sqlitemodel import SQL
 from config import config
 from logging_config import logger
 from models import Reply, Settings, Schedule, VipList, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
+from services.caldav_service import caldav_service
 
 
 # =============================================================================
@@ -174,13 +175,16 @@ def get_auth_cancel_keyboard():
 
 def get_main_menu_keyboard():
     """Main menu keyboard."""
-    return [
+    buttons = [
         [Button.inline("📅 Расписание статусов", b"schedule")],
         [Button.inline("📝 Автоответы", b"replies")],
         [Button.inline("🔔 Контекст призыва", b"mentions")],
         [Button.inline("📊 Продуктивность", b"productivity")],
+        [Button.inline("📆 Календарь", b"calendar")],
         [Button.inline("⚙️ Настройки", b"settings")],
     ]
+
+    return buttons
 
 
 def get_back_keyboard():
@@ -311,6 +315,25 @@ def get_settings_keyboard():
         [Button.inline("🚪 Выйти из аккаунта", b"logout_confirm")],
         [Button.inline("« Назад", b"main")],
     ]
+
+
+def get_calendar_keyboard():
+    """Calendar sync management keyboard."""
+    is_configured = Settings.is_caldav_configured()
+    is_enabled = Settings.is_calendar_sync_enabled()
+
+    buttons = []
+
+    if is_configured:
+        toggle_text = "🟢 Синхронизация вкл" if is_enabled else "🔴 Синхронизация выкл"
+        toggle_data = b"calendar_off" if is_enabled else b"calendar_on"
+        buttons.append([Button.inline(toggle_text, toggle_data)])
+        buttons.append([Button.inline("🔗 Проверить подключение", b"calendar_test")])
+
+    buttons.append([Button.inline("⚙️ Настроить CalDAV", b"calendar_setup")])
+    buttons.append([Button.inline("« Назад", b"main")])
+
+    return buttons
 
 
 def get_mentions_keyboard():
@@ -1403,6 +1426,340 @@ def register_bot_handlers(bot, user_client=None):
         await meeting_menu(event)
 
     # =========================================================================
+    # Calendar
+    # =========================================================================
+
+    # Pending CalDAV setup states
+    _pending_caldav_url: set[int] = set()
+    _pending_caldav_username: set[int] = set()
+    _pending_caldav_password: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"calendar"))
+    async def calendar_menu(event):
+        """Show calendar sync menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        is_configured = Settings.is_caldav_configured()
+        is_enabled = Settings.is_calendar_sync_enabled()
+        meeting_emoji = Settings.get('meeting_emoji_id')
+
+        if is_configured:
+            url = Settings.get_caldav_url() or ""
+            # Hide URL details for privacy
+            url_display = url.split("//")[-1].split("/")[0] if url else "не указан"
+            selected_calendars = Settings.get_caldav_calendars()
+            if selected_calendars:
+                calendar_info = f"{len(selected_calendars)} выбрано"
+            else:
+                calendar_info = "все"
+
+            status_icon = "🟢" if is_enabled else "🔴"
+            status_text = "Включена" if is_enabled else "Выключена"
+            emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌ не задан"
+
+            # Get calendar status with events
+            cal_status = await caldav_service.get_calendar_status()
+
+            text = (
+                f"📆 **Календарь** {status_icon}\n\n"
+                f"**Сервер:** {url_display}\n"
+                f"**Календари:** {calendar_info} (всего: {cal_status.get('calendar_count', '?')})\n"
+                f"**Emoji встречи:** {emoji_status}\n"
+            )
+
+            # Show current event
+            current = cal_status.get('current_event')
+            if current:
+                text += f"\n🔴 **Сейчас:** {current.summary}\n"
+                text += f"   до {current.end.strftime('%H:%M')} ({current.calendar_name})\n"
+
+            # Show upcoming events
+            upcoming = cal_status.get('upcoming_events', [])
+            if upcoming:
+                text += "\n📋 **Ближайшие:**\n"
+                for evt in upcoming[:3]:
+                    time_str = evt.start.strftime('%H:%M')
+                    text += f"• {time_str} — {evt.summary[:30]}\n"
+            elif not current:
+                text += "\n✅ Нет ближайших событий\n"
+
+        else:
+            text = (
+                "📆 **Синхронизация с календарём**\n\n"
+                "⚠️ CalDAV не настроен\n\n"
+                "Настройте подключение к календарю для "
+                "автоматического изменения статуса во время встреч."
+            )
+
+        await event.edit(text, buttons=get_calendar_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"calendar_on"))
+    async def calendar_enable(event):
+        """Enable calendar sync."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        if not Settings.is_caldav_configured():
+            await event.answer("❌ Сначала настройте CalDAV", alert=True)
+            return
+
+        Settings.set_calendar_sync_enabled(True)
+        logger.info("Calendar sync enabled via bot")
+
+        await event.answer("🟢 Синхронизация включена")
+        await calendar_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"calendar_off"))
+    async def calendar_disable(event):
+        """Disable calendar sync."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_calendar_sync_enabled(False)
+        caldav_service.clear_state()
+        logger.info("Calendar sync disabled via bot")
+
+        await event.answer("🔴 Синхронизация выключена")
+        await calendar_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"calendar_test"))
+    async def calendar_test(event):
+        """Test CalDAV connection."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        await event.answer("🔄 Проверяю...")
+
+        # Get detailed status
+        status = await caldav_service.get_calendar_status()
+
+        if status.get('connected'):
+            cal_count = status.get('calendar_count', 0)
+            active_count = status.get('active_calendar_count', 0)
+            current = status.get('current_event')
+            upcoming = status.get('upcoming_events', [])
+
+            text = f"✅ **Подключение успешно**\n\n"
+            text += f"📅 Календарей: {cal_count} (активных: {active_count})\n"
+
+            if current:
+                text += f"\n🔴 **Сейчас идёт:** {current.summary}\n"
+                text += f"   {current.start.strftime('%H:%M')} - {current.end.strftime('%H:%M')}\n"
+                text += f"   Календарь: {current.calendar_name}\n"
+
+            if upcoming:
+                text += f"\n📋 **Ближайшие события:**\n"
+                for evt in upcoming[:5]:
+                    text += f"• {evt.start.strftime('%H:%M')} — {evt.summary[:35]}\n"
+            elif not current:
+                text += "\n✅ Нет ближайших событий (8ч)\n"
+        else:
+            error = status.get('error', 'Неизвестная ошибка')
+            text = f"❌ **Ошибка подключения**\n\n{error}"
+
+        await event.edit(text, buttons=[[Button.inline("« Назад", b"calendar")]])
+
+    @bot.on(events.CallbackQuery(data=b"calendar_setup"))
+    async def calendar_setup_menu(event):
+        """Show CalDAV setup menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        url = Settings.get_caldav_url()
+        username = Settings.get_caldav_username()
+        password = Settings.get_caldav_password()
+        selected_calendars = Settings.get_caldav_calendars()
+
+        url_status = "✅" if url else "❌"
+        user_status = "✅" if username else "❌"
+        pass_status = "✅" if password else "❌"
+
+        if selected_calendars:
+            cal_info = f"{len(selected_calendars)} выбрано"
+        else:
+            cal_info = "все"
+
+        text = (
+            "⚙️ **Настройка CalDAV**\n\n"
+            f"{url_status} URL сервера: {url or 'не указан'}\n"
+            f"{user_status} Логин: {username or 'не указан'}\n"
+            f"{pass_status} Пароль: {'••••••' if password else 'не указан'}\n"
+            f"📅 Календари: {cal_info}\n\n"
+            "**Примеры серверов:**\n"
+            "• Яндекс: `https://caldav.yandex.ru`\n"
+            "• Google: `https://apidata.googleusercontent.com/caldav/v2`\n"
+            "• iCloud: `https://caldav.icloud.com`"
+        )
+
+        buttons = [
+            [Button.inline("🌐 URL сервера", b"caldav_url")],
+            [Button.inline("👤 Логин", b"caldav_user")],
+            [Button.inline("🔑 Пароль", b"caldav_pass")],
+            [Button.inline("📅 Выбрать календари", b"caldav_calendars")],
+            [Button.inline("« Назад", b"calendar")],
+        ]
+
+        await event.edit(text, buttons=buttons)
+
+    @bot.on(events.CallbackQuery(data=b"caldav_url"))
+    async def caldav_url_start(event):
+        """Start setting CalDAV URL."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_url.add(event.sender_id)
+
+        current = Settings.get_caldav_url()
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            "🌐 **URL CalDAV сервера**\n\n"
+            "Отправьте URL вашего CalDAV сервера."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_user"))
+    async def caldav_user_start(event):
+        """Start setting CalDAV username."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_username.add(event.sender_id)
+
+        current = Settings.get_caldav_username()
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            "👤 **Логин CalDAV**\n\n"
+            "Отправьте логин (обычно email)."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_pass"))
+    async def caldav_pass_start(event):
+        """Start setting CalDAV password."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_password.add(event.sender_id)
+
+        await event.edit(
+            "🔑 **Пароль CalDAV**\n\n"
+            "Отправьте пароль или пароль приложения.\n\n"
+            "⚠️ Для Google/Яндекс используйте пароль приложения.",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_calendars"))
+    async def caldav_calendars_menu(event):
+        """Show available calendars for selection."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        if not Settings.is_caldav_configured():
+            await event.answer("❌ Сначала настройте подключение", alert=True)
+            return
+
+        await event.answer("🔄 Загрузка календарей...")
+
+        calendars = await caldav_service.get_available_calendars()
+
+        if not calendars:
+            await event.edit(
+                "❌ **Календари не найдены**\n\n"
+                "Не удалось получить список календарей.\n"
+                "Проверьте настройки подключения.",
+                buttons=[[Button.inline("« Назад", b"calendar_setup")]]
+            )
+            return
+
+        selected = Settings.get_caldav_calendars()
+
+        text = (
+            "📅 **Выбор календарей**\n\n"
+            "Выберите календари для отслеживания встреч.\n"
+            "Если ничего не выбрано — используются все.\n\n"
+        )
+
+        if selected:
+            text += f"Выбрано: {len(selected)} из {len(calendars)}"
+        else:
+            text += f"Используются все ({len(calendars)})"
+
+        buttons = []
+        for cal in calendars:
+            # Strip whitespace for consistent comparison
+            cal_name = cal.name.strip()
+            is_selected = cal_name in selected
+            icon = "✅" if is_selected else "⬜"
+            callback_data = f"cal_toggle:{cal_name}".encode()
+            buttons.append([Button.inline(f"{icon} {cal.name}", callback_data)])
+
+        buttons.append([Button.inline("🔄 Сбросить выбор", b"caldav_calendars_reset")])
+        buttons.append([Button.inline("« Назад", b"calendar_setup")])
+
+        await event.edit(text, buttons=buttons)
+
+    @bot.on(events.CallbackQuery(pattern=rb"cal_toggle:(.+)"))
+    async def caldav_calendar_toggle(event):
+        """Toggle a calendar selection."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        calendar_name = event.pattern_match.group(1).decode().strip()
+        selected = Settings.get_caldav_calendars()
+
+        if calendar_name in selected:
+            Settings.remove_caldav_calendar(calendar_name)
+            await event.answer(f"❌ Отключен")
+        else:
+            Settings.add_caldav_calendar(calendar_name)
+            await event.answer(f"✅ Включен")
+
+        # Refresh the calendar list
+        await caldav_calendars_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"caldav_calendars_reset"))
+    async def caldav_calendars_reset(event):
+        """Reset calendar selection to use all."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_caldav_calendars([])
+        caldav_service.clear_state()
+        await event.answer("✅ Используются все календари")
+
+        # Refresh the calendar list
+        await caldav_calendars_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"caldav_cancel"))
+    async def caldav_cancel(event):
+        """Cancel CalDAV setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_url.discard(event.sender_id)
+        _pending_caldav_username.discard(event.sender_id)
+        _pending_caldav_password.discard(event.sender_id)
+
+        await calendar_setup_menu(event)
+
+    # =========================================================================
     # Settings
     # =========================================================================
 
@@ -2137,6 +2494,79 @@ def register_bot_handlers(bot, user_client=None):
             await event.respond(
                 f"✅ Эмодзи по умолчанию установлен!",
                 buttons=get_schedule_keyboard()
+            )
+            return
+
+        # Check if user is setting CalDAV URL
+        if event.sender_id in _pending_caldav_url:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if not text.startswith("http"):
+                await event.respond(
+                    "❌ URL должен начинаться с http:// или https://",
+                    buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+                )
+                return
+
+            Settings.set_caldav_url(text)
+            _pending_caldav_url.discard(event.sender_id)
+            caldav_service.disconnect()  # Force reconnect with new settings
+            logger.info(f"CalDAV URL set to {text}")
+
+            await event.respond(
+                "✅ URL сервера сохранён!",
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting CalDAV username
+        if event.sender_id in _pending_caldav_username:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if not text:
+                await event.respond(
+                    "❌ Введите логин",
+                    buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+                )
+                return
+
+            Settings.set_caldav_username(text)
+            _pending_caldav_username.discard(event.sender_id)
+            caldav_service.disconnect()
+            logger.info(f"CalDAV username set")
+
+            await event.respond(
+                "✅ Логин сохранён!",
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting CalDAV password
+        if event.sender_id in _pending_caldav_password:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if not text:
+                await event.respond(
+                    "❌ Введите пароль",
+                    buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+                )
+                return
+
+            Settings.set_caldav_password(text)
+            _pending_caldav_password.discard(event.sender_id)
+            caldav_service.disconnect()
+            logger.info("CalDAV password set")
+
+            # Delete the message with password for security
+            try:
+                await event.message.delete()
+            except Exception:
+                pass
+
+            await bot.send_message(
+                event.sender_id,
+                "✅ Пароль сохранён!",
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
             )
             return
 
