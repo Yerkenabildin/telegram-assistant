@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from telethon.errors import FloodWaitError
 
+from config import config
 from logging_config import get_logger
 
 logger = get_logger('productivity')
@@ -204,6 +205,12 @@ class ProductivityService:
             # Skip Saved Messages (self-chat)
             if hasattr(entity, 'id') and entity.id == me.id:
                 continue
+
+            # Skip personal notification account (PERSONAL_TG_LOGIN)
+            if config.personal_tg_login:
+                entity_username = getattr(entity, 'username', None)
+                if entity_username and entity_username.lower() == config.personal_tg_login.lower():
+                    continue
 
             dialog_count += 1
 
