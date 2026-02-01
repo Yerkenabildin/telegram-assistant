@@ -312,8 +312,29 @@ def get_meeting_keyboard():
 def get_settings_keyboard():
     """Settings keyboard."""
     return [
+        [Button.inline("💬 Приватные сообщения", b"private_messages")],
         [Button.inline("🚪 Выйти из аккаунта", b"logout_confirm")],
         [Button.inline("« Назад", b"main")],
+    ]
+
+
+def get_private_messages_keyboard():
+    """Private messages settings keyboard."""
+    is_asap_enabled = Settings.is_asap_enabled()
+    asap_toggle_text = "🟢 ASAP включен" if is_asap_enabled else "🔴 ASAP выключен"
+    asap_toggle_data = b"asap_off" if is_asap_enabled else b"asap_on"
+
+    personal_chat_id = Settings.get_personal_chat_id()
+    personal_text = "👤 Персональный чат ✓" if personal_chat_id else "👤 Персональный чат"
+
+    webhook_url = Settings.get_asap_webhook_url()
+    webhook_text = "🔗 Webhook ✓" if webhook_url else "🔗 Webhook"
+
+    return [
+        [Button.inline(personal_text, b"pm_personal_chat")],
+        [Button.inline(asap_toggle_text, asap_toggle_data)],
+        [Button.inline(webhook_text, b"pm_webhook")],
+        [Button.inline("« Назад", b"settings")],
     ]
 
 
@@ -1955,6 +1976,188 @@ def register_bot_handlers(bot, user_client=None):
         )
 
     # =========================================================================
+    # Private Messages Settings
+    # =========================================================================
+
+    # Pending states for private messages settings
+    _pending_personal_chat: set[int] = set()
+    _pending_asap_webhook: set[int] = set()
+
+    @bot.on(events.CallbackQuery(data=b"private_messages"))
+    async def private_messages_menu(event):
+        """Show private messages settings menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        personal_chat_id = Settings.get_personal_chat_id()
+        webhook_url = Settings.get_asap_webhook_url()
+        is_asap_enabled = Settings.is_asap_enabled()
+
+        text = "💬 **Приватные сообщения**\n\n"
+
+        # Personal chat status
+        if personal_chat_id:
+            try:
+                entity = await _user_client.get_entity(personal_chat_id)
+                name = getattr(entity, 'first_name', None) or getattr(entity, 'title', str(personal_chat_id))
+                text += f"👤 Персональный чат: **{name}**\n"
+            except Exception:
+                text += f"👤 Персональный чат: `{personal_chat_id}`\n"
+        else:
+            text += "👤 Персональный чат: _не настроен_\n"
+
+        # ASAP status
+        asap_status = "✅ включены" if is_asap_enabled else "❌ выключены"
+        text += f"🚨 ASAP уведомления: {asap_status}\n"
+
+        # Webhook status
+        if webhook_url:
+            # Show truncated URL for privacy
+            url_display = webhook_url[:40] + "..." if len(webhook_url) > 40 else webhook_url
+            text += f"🔗 Webhook: `{url_display}`\n"
+        else:
+            text += "🔗 Webhook: _не настроен_\n"
+
+        text += "\n_ASAP уведомления отправляются когда кто-то пишет вам в личку со словом ASAP._"
+
+        await event.edit(text, buttons=get_private_messages_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"pm_personal_chat"))
+    async def pm_personal_chat_start(event):
+        """Start setting personal chat."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_personal_chat.add(event.sender_id)
+
+        current = Settings.get_personal_chat_id()
+        current_info = ""
+        if current:
+            try:
+                entity = await _user_client.get_entity(current)
+                name = getattr(entity, 'first_name', None) or getattr(entity, 'title', str(current))
+                current_info = f"\n\nТекущий: **{name}**"
+            except Exception:
+                current_info = f"\n\nТекущий: `{current}`"
+
+        buttons = []
+        if current:
+            buttons.append([Button.inline("🗑 Очистить", b"pm_personal_chat_clear")])
+        buttons.append([Button.inline("❌ Отмена", b"pm_personal_chat_cancel")])
+
+        await event.edit(
+            "👤 **Персональный чат**\n\n"
+            "Перешлите любое сообщение из чата,\n"
+            "в который будут приходить ASAP уведомления.\n\n"
+            "Или отправьте ID чата/username."
+            f"{current_info}",
+            buttons=buttons
+        )
+
+    @bot.on(events.CallbackQuery(data=b"pm_personal_chat_cancel"))
+    async def pm_personal_chat_cancel(event):
+        """Cancel personal chat setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_personal_chat.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"pm_personal_chat_clear"))
+    async def pm_personal_chat_clear(event):
+        """Clear personal chat setting."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_personal_chat.discard(event.sender_id)
+        Settings.set_personal_chat_id(None)
+        logger.info("Personal chat cleared")
+        await event.answer("✅ Персональный чат очищен")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"asap_on"))
+    async def asap_enable(event):
+        """Enable ASAP notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_asap_enabled(True)
+        logger.info("ASAP notifications enabled")
+        await event.answer("✅ ASAP уведомления включены")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"asap_off"))
+    async def asap_disable(event):
+        """Disable ASAP notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_asap_enabled(False)
+        logger.info("ASAP notifications disabled")
+        await event.answer("❌ ASAP уведомления выключены")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"pm_webhook"))
+    async def pm_webhook_start(event):
+        """Start setting webhook URL."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_asap_webhook.add(event.sender_id)
+
+        current = Settings.get_asap_webhook_url()
+        current_info = ""
+        if current:
+            url_display = current[:50] + "..." if len(current) > 50 else current
+            current_info = f"\n\nТекущий: `{url_display}`"
+
+        buttons = []
+        if current:
+            buttons.append([Button.inline("🗑 Очистить", b"pm_webhook_clear")])
+        buttons.append([Button.inline("❌ Отмена", b"pm_webhook_cancel")])
+
+        await event.edit(
+            "🔗 **Webhook URL**\n\n"
+            "Отправьте URL, на который будут отправляться\n"
+            "POST-запросы при ASAP уведомлениях.\n\n"
+            "URL должен начинаться с http:// или https://"
+            f"{current_info}",
+            buttons=buttons
+        )
+
+    @bot.on(events.CallbackQuery(data=b"pm_webhook_cancel"))
+    async def pm_webhook_cancel(event):
+        """Cancel webhook setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_asap_webhook.discard(event.sender_id)
+        await event.answer("❌ Отменено")
+        await private_messages_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"pm_webhook_clear"))
+    async def pm_webhook_clear(event):
+        """Clear webhook URL."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_asap_webhook.discard(event.sender_id)
+        Settings.set_asap_webhook_url(None)
+        logger.info("ASAP webhook URL cleared")
+        await event.answer("✅ Webhook очищен")
+        await private_messages_menu(event)
+
+    # =========================================================================
     # Text message handlers for setting replies and schedule
     # =========================================================================
 
@@ -2676,6 +2879,93 @@ def register_bot_handlers(bot, user_client=None):
                 event.sender_id,
                 "✅ Пароль сохранён!",
                 buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting personal chat for ASAP notifications
+        if event.sender_id in _pending_personal_chat:
+            chat_id = None
+            chat_name = None
+
+            # Check if message was forwarded - get chat from forward
+            if event.message.fwd_from:
+                fwd = event.message.fwd_from
+                if hasattr(fwd, 'from_id') and fwd.from_id:
+                    from telethon.tl.types import PeerUser, PeerChat, PeerChannel
+                    if isinstance(fwd.from_id, PeerUser):
+                        chat_id = fwd.from_id.user_id
+                    elif isinstance(fwd.from_id, PeerChat):
+                        chat_id = fwd.from_id.chat_id
+                    elif isinstance(fwd.from_id, PeerChannel):
+                        chat_id = fwd.from_id.channel_id
+
+            # If not forwarded, try to parse text as chat ID or username
+            if not chat_id:
+                text = event.message.text.strip() if event.message.text else ""
+                if text:
+                    # Try as numeric ID
+                    try:
+                        chat_id = int(text)
+                    except ValueError:
+                        # Try as username
+                        try:
+                            entity = await _user_client.get_entity(text)
+                            chat_id = entity.id
+                            chat_name = getattr(entity, 'first_name', None) or \
+                                       getattr(entity, 'title', None) or str(chat_id)
+                        except Exception as e:
+                            await event.respond(
+                                f"❌ Не удалось найти чат: {text}\n\n"
+                                "Перешлите сообщение из нужного чата или введите корректный ID/username.",
+                                buttons=[[Button.inline("❌ Отмена", b"pm_personal_chat_cancel")]]
+                            )
+                            return
+
+            if not chat_id:
+                await event.respond(
+                    "❌ Не удалось определить чат.\n\n"
+                    "Перешлите любое сообщение из чата или введите ID/username.",
+                    buttons=[[Button.inline("❌ Отмена", b"pm_personal_chat_cancel")]]
+                )
+                return
+
+            # Get chat name if not already set
+            if not chat_name:
+                try:
+                    entity = await _user_client.get_entity(chat_id)
+                    chat_name = getattr(entity, 'first_name', None) or \
+                               getattr(entity, 'title', None) or str(chat_id)
+                except Exception:
+                    chat_name = str(chat_id)
+
+            Settings.set_personal_chat_id(chat_id)
+            _pending_personal_chat.discard(event.sender_id)
+            logger.info(f"Personal chat set to {chat_id} ({chat_name})")
+
+            await event.respond(
+                f"✅ Персональный чат установлен!\n\n**{chat_name}**\n\nASAP уведомления будут приходить в этот чат.",
+                buttons=[[Button.inline("« Назад", b"private_messages")]]
+            )
+            return
+
+        # Check if user is setting ASAP webhook URL
+        if event.sender_id in _pending_asap_webhook:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if not text.startswith("http"):
+                await event.respond(
+                    "❌ URL должен начинаться с http:// или https://",
+                    buttons=[[Button.inline("❌ Отмена", b"pm_webhook_cancel")]]
+                )
+                return
+
+            Settings.set_asap_webhook_url(text)
+            _pending_asap_webhook.discard(event.sender_id)
+            logger.info(f"ASAP webhook URL set")
+
+            await event.respond(
+                "✅ Webhook URL сохранён!",
+                buttons=[[Button.inline("« Назад", b"private_messages")]]
             )
             return
 

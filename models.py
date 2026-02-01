@@ -606,6 +606,72 @@ class Settings(Model):
         else:
             Settings.set('absence_emoji_id', str(emoji_id))
 
+    # =========================================================================
+    # Personal Chat Settings (for ASAP and other notifications)
+    # =========================================================================
+
+    @staticmethod
+    def get_personal_chat_id() -> Optional[int]:
+        """Get personal chat ID for notifications.
+
+        Returns:
+            Chat ID as integer or None if not set
+        """
+        value = Settings.get('personal_chat_id')
+        return int(value) if value else None
+
+    @staticmethod
+    def set_personal_chat_id(chat_id: Optional[int]) -> None:
+        """Set or clear personal chat ID for notifications.
+
+        Args:
+            chat_id: Chat ID to set, or None to clear
+        """
+        if chat_id is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'personal_chat_id'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('personal_chat_id', str(chat_id))
+
+    # =========================================================================
+    # ASAP Notification Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_asap_enabled() -> bool:
+        """Check if ASAP notifications are enabled (default: True)."""
+        value = Settings.get('asap_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_asap_enabled(enabled: bool) -> None:
+        """Enable or disable ASAP notifications."""
+        Settings.set('asap_enabled', 'true' if enabled else 'false')
+
+    @staticmethod
+    def get_asap_webhook_url() -> Optional[str]:
+        """Get webhook URL for ASAP notifications.
+
+        Returns:
+            Webhook URL or None if not set
+        """
+        return Settings.get('asap_webhook_url')
+
+    @staticmethod
+    def set_asap_webhook_url(url: Optional[str]) -> None:
+        """Set or clear webhook URL for ASAP notifications.
+
+        Args:
+            url: Webhook URL to set, or None to clear
+        """
+        if url is None:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'asap_webhook_url'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('asap_webhook_url', url)
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""
