@@ -1449,7 +1449,11 @@ def register_bot_handlers(bot, user_client=None):
             url = Settings.get_caldav_url() or ""
             # Hide URL details for privacy
             url_display = url.split("//")[-1].split("/")[0] if url else "не указан"
-            calendar_name = Settings.get_caldav_calendar_name() or "первый доступный"
+            selected_calendars = Settings.get_caldav_calendars()
+            if selected_calendars:
+                calendar_info = f"{len(selected_calendars)} выбрано"
+            else:
+                calendar_info = "все доступные"
 
             status = "🟢 Включена" if is_enabled else "🔴 Выключена"
             emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌ не настроен (задайте в Расписание)"
@@ -1458,7 +1462,7 @@ def register_bot_handlers(bot, user_client=None):
                 "📆 **Синхронизация с календарём**\n\n"
                 f"**Статус:** {status}\n"
                 f"**Сервер:** {url_display}\n"
-                f"**Календарь:** {calendar_name}\n"
+                f"**Календари:** {calendar_info}\n"
                 f"**Emoji встречи:** {emoji_status}\n\n"
                 "При начале события в календаре автоматически "
                 "включается статус встречи. После окончания — "
