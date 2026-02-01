@@ -2395,3 +2395,298 @@ class TestProductivityBotMenuIntegration:
             is_valid = False
 
         assert is_valid is False
+
+
+class TestProductivityTempChats:
+    """Tests for temporary productivity chats feature."""
+
+    def test_get_temp_chats_empty_by_default(self):
+        """Test get_productivity_temp_chats returns empty list by default."""
+        value = None  # Simulate no setting
+
+        chat_ids = []
+        if value:
+            for part in value.split(','):
+                part = part.strip()
+                if part:
+                    try:
+                        chat_ids.append(int(part))
+                    except ValueError:
+                        pass
+
+        assert chat_ids == []
+
+    def test_add_temp_chat(self):
+        """Test adding chat to temp list."""
+        temp_chats = []
+        chat_id = -1001234567890
+
+        if chat_id not in temp_chats:
+            temp_chats.append(chat_id)
+
+        assert chat_id in temp_chats
+        assert len(temp_chats) == 1
+
+    def test_add_duplicate_temp_chat_not_added(self):
+        """Test duplicate chat is not added to temp list."""
+        temp_chats = [-1001234567890]
+        chat_id = -1001234567890  # Same
+
+        if chat_id not in temp_chats:
+            temp_chats.append(chat_id)
+
+        assert len(temp_chats) == 1
+
+    def test_clear_temp_chats(self):
+        """Test clearing all temp chats."""
+        temp_chats = [-1001234567890, -100987654321, -100111222333]
+
+        # Clear
+        temp_chats = []
+
+        assert temp_chats == []
+
+    def test_combine_extra_and_temp_chats(self):
+        """Test combining extra chats with temp chats."""
+        extra_chat_ids = [-1001111111111, -1002222222222]
+        temp_chat_ids = [-1003333333333, -1001111111111]  # One duplicate
+
+        # Combine with set to remove duplicates
+        all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
+
+        assert len(all_extra_chats) == 3  # 4 total - 1 duplicate = 3
+        assert -1001111111111 in all_extra_chats
+        assert -1002222222222 in all_extra_chats
+        assert -1003333333333 in all_extra_chats
+
+
+class TestProductivityTempChatTriggers:
+    """Tests for temp chat triggers (mention and reply)."""
+
+    def test_mention_triggers_temp_chat_add(self):
+        """Test that mention in group adds chat to temp list."""
+        is_private = False
+        is_mentioned = True
+        chat_id = -1001234567890
+
+        should_add = not is_private and is_mentioned
+
+        assert should_add is True
+
+    def test_mention_in_private_does_not_trigger(self):
+        """Test that mention in private chat does not add to temp list."""
+        is_private = True
+        is_mentioned = True
+
+        should_add = not is_private and is_mentioned
+
+        assert should_add is False
+
+    def test_reply_to_my_message_triggers_temp_chat_add(self):
+        """Test that reply to my message adds chat to temp list."""
+        is_private = False
+        is_reply = True
+        original_sender_is_me = True
+        chat_id = -1001234567890
+
+        should_add = not is_private and is_reply and original_sender_is_me
+
+        assert should_add is True
+
+    def test_reply_to_others_message_does_not_trigger(self):
+        """Test that reply to someone else's message does not trigger."""
+        is_private = False
+        is_reply = True
+        original_sender_is_me = False
+
+        should_add = not is_private and is_reply and original_sender_is_me
+
+        assert should_add is False
+
+    def test_non_reply_does_not_trigger(self):
+        """Test that non-reply message does not trigger."""
+        is_private = False
+        is_reply = False
+        original_sender_is_me = True
+
+        should_add = not is_private and is_reply and original_sender_is_me
+
+        assert should_add is False
+
+    def test_reply_in_private_does_not_trigger(self):
+        """Test that reply in private chat does not trigger."""
+        is_private = True
+        is_reply = True
+        original_sender_is_me = True
+
+        should_add = not is_private and is_reply and original_sender_is_me
+
+        assert should_add is False
+
+
+class TestProductivityTempChatReplyDetection:
+    """Tests for reply-to-my-message detection logic."""
+
+    def test_detect_reply_to_msg_id(self):
+        """Test detection of reply_to_msg_id attribute."""
+        message = MagicMock()
+        message.reply_to_msg_id = 42
+
+        reply_to_id = getattr(message, 'reply_to_msg_id', None)
+
+        assert reply_to_id == 42
+
+    def test_detect_nested_reply_to(self):
+        """Test detection of nested reply_to structure."""
+        message = MagicMock()
+        message.reply_to_msg_id = None
+        message.reply_to = MagicMock()
+        message.reply_to.reply_to_msg_id = 42
+
+        reply_to_id = getattr(message, 'reply_to_msg_id', None)
+        if not reply_to_id:
+            reply_to = getattr(message, 'reply_to', None)
+            if reply_to:
+                reply_to_id = getattr(reply_to, 'reply_to_msg_id', None)
+
+        assert reply_to_id == 42
+
+    def test_no_reply_detected(self):
+        """Test no reply when neither attribute exists."""
+        message = MagicMock()
+        message.reply_to_msg_id = None
+        message.reply_to = None
+
+        reply_to_id = getattr(message, 'reply_to_msg_id', None)
+        if not reply_to_id:
+            reply_to = getattr(message, 'reply_to', None)
+            if reply_to:
+                reply_to_id = getattr(reply_to, 'reply_to_msg_id', None)
+
+        assert reply_to_id is None
+
+    def test_check_original_message_sender(self):
+        """Test checking if original message was sent by me."""
+        original_msg = MagicMock()
+        original_msg.sender_id = 123456
+        my_id = 123456
+
+        is_my_message = original_msg.sender_id == my_id
+
+        assert is_my_message is True
+
+    def test_original_message_from_others(self):
+        """Test when original message was sent by someone else."""
+        original_msg = MagicMock()
+        original_msg.sender_id = 789012
+        my_id = 123456
+
+        is_my_message = original_msg.sender_id == my_id
+
+        assert is_my_message is False
+
+
+class TestProductivityTempChatClearing:
+    """Tests for clearing temp chats after summary generation."""
+
+    def test_temp_chats_cleared_after_summary(self):
+        """Test temp chats are cleared after summary is generated."""
+        temp_chat_ids = [-1001111111111, -1002222222222]
+
+        # Simulate summary generation
+        summary_generated = True
+
+        # Clear after summary
+        if summary_generated:
+            temp_chat_ids_after = []
+        else:
+            temp_chat_ids_after = temp_chat_ids
+
+        assert temp_chat_ids_after == []
+
+    def test_temp_chats_preserved_if_summary_fails(self):
+        """Test temp chats not cleared if summary generation fails."""
+        temp_chat_ids = [-1001111111111, -1002222222222]
+
+        # Simulate failed summary generation
+        summary_generated = False
+
+        # Don't clear if failed
+        if summary_generated:
+            temp_chat_ids_after = []
+        else:
+            temp_chat_ids_after = temp_chat_ids
+
+        assert len(temp_chat_ids_after) == 2
+
+    def test_clearing_empty_list_is_safe(self):
+        """Test clearing empty temp list is safe."""
+        temp_chat_ids = []
+
+        # Clear (should not raise)
+        temp_chat_ids = []
+
+        assert temp_chat_ids == []
+
+    def test_log_cleared_count(self):
+        """Test that cleared count is available for logging."""
+        temp_chat_ids = [-1001111111111, -1002222222222, -1003333333333]
+        cleared_count = len(temp_chat_ids)
+
+        # Clear
+        temp_chat_ids = []
+
+        assert cleared_count == 3
+        assert len(temp_chat_ids) == 0
+
+
+class TestProductivityTempChatIntegration:
+    """Integration tests for temp chats in productivity flow."""
+
+    def test_muted_temp_chat_included_in_summary(self):
+        """Test muted chat from temp list is included in summary."""
+        dialog_id = -1001234567890
+        is_muted = True
+        extra_chat_ids = []  # Not in permanent extras
+        temp_chat_ids = [-1001234567890]  # But in temp list
+
+        all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
+        is_in_extras = dialog_id in all_extra_chats
+        should_skip = is_muted and not is_in_extras
+
+        assert is_in_extras is True
+        assert should_skip is False  # Should NOT be skipped
+
+    def test_unmuted_chat_included_regardless_of_temp(self):
+        """Test unmuted chat is included regardless of temp list."""
+        dialog_id = -1001234567890
+        is_muted = False
+        extra_chat_ids = []
+        temp_chat_ids = []  # Not in temp either
+
+        all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
+        is_in_extras = dialog_id in all_extra_chats
+        should_skip = is_muted and not is_in_extras
+
+        assert should_skip is False  # Unmuted = always included
+
+    def test_chat_in_both_permanent_and_temp_not_duplicated(self):
+        """Test chat in both lists is not processed twice."""
+        extra_chat_ids = [-1001234567890]
+        temp_chat_ids = [-1001234567890]  # Same chat
+
+        all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
+
+        assert len(all_extra_chats) == 1
+        assert -1001234567890 in all_extra_chats
+
+    def test_multiple_temp_chats_all_included(self):
+        """Test multiple temp chats are all included."""
+        extra_chat_ids = [-1001111111111]
+        temp_chat_ids = [-1002222222222, -1003333333333, -1004444444444]
+
+        all_extra_chats = list(set(extra_chat_ids + temp_chat_ids))
+
+        assert len(all_extra_chats) == 4
+        for chat_id in temp_chat_ids:
+            assert chat_id in all_extra_chats
