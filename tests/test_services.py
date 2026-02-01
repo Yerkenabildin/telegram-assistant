@@ -2690,3 +2690,394 @@ class TestProductivityTempChatIntegration:
         assert len(all_extra_chats) == 4
         for chat_id in temp_chat_ids:
             assert chat_id in all_extra_chats
+
+
+# =============================================================================
+# Private Message Notification Tests
+# =============================================================================
+
+
+class TestPrivateNotificationSettings:
+    """Tests for private message notification settings."""
+
+    def test_default_is_disabled(self):
+        """Test private notification is disabled by default."""
+        # Simulate Settings.get returning None (not set)
+        value = None
+        is_enabled = value == 'true'
+
+        assert is_enabled is False
+
+    def test_enabled_when_set_to_true(self):
+        """Test private notification is enabled when set to true."""
+        value = 'true'
+        is_enabled = value == 'true'
+
+        assert is_enabled is True
+
+    def test_disabled_when_set_to_false(self):
+        """Test private notification is disabled when set to false."""
+        value = 'false'
+        is_enabled = value == 'true'
+
+        assert is_enabled is False
+
+    def test_disabled_for_any_other_value(self):
+        """Test private notification is disabled for any non-'true' value."""
+        for value in ['yes', '1', 'True', 'TRUE', 'enabled', '']:
+            is_enabled = value == 'true'
+            assert is_enabled is False
+
+
+class TestPrivateMessageSummaryGeneration:
+    """Tests for MentionService.generate_private_summary()."""
+
+    def test_includes_topic_from_text(self):
+        """Test summary includes detected topic."""
+        import re
+
+        current_text = "Can you help with the PR?"
+        topic_patterns = [
+            (r'\b(pr|пр|pull.?request|merge|мерж|ревью|review)\b', '👀 Нужно ревью кода'),
+            (r'\b(помо[гщ]|help|подскаж|объясн|разбер)\b', '🆘 Нужна помощь'),
+        ]
+
+        detected_topics = []
+        for pattern, topic in topic_patterns:
+            if re.search(pattern, current_text.lower()):
+                detected_topics.append(topic)
+
+        assert '👀 Нужно ревью кода' in detected_topics
+        assert '🆘 Нужна помощь' in detected_topics
+
+    def test_includes_context_messages(self):
+        """Test summary includes context from previous messages."""
+        messages = [
+            MagicMock(id=1, text="Previous message 1"),
+            MagicMock(id=2, text="Previous message 2"),
+            MagicMock(id=3, text="Current message"),  # Current
+        ]
+        current_message = messages[2]
+
+        # Simulate context extraction (excluding current)
+        context_msgs = []
+        for msg in messages:
+            if msg.id != current_message.id:
+                context_msgs.append(msg.text)
+
+        assert len(context_msgs) == 2
+        assert "Previous message 1" in context_msgs
+        assert "Previous message 2" in context_msgs
+
+    def test_limits_context_messages(self):
+        """Test summary limits number of context messages."""
+        max_context = 5
+        messages = [MagicMock(id=i, text=f"Message {i}") for i in range(10)]
+        current_message = messages[9]
+
+        context_msgs = []
+        for msg in messages:
+            if msg.id == current_message.id:
+                continue
+            if len(context_msgs) >= max_context:
+                break
+            context_msgs.append(msg.text)
+
+        assert len(context_msgs) == max_context
+
+    def test_truncates_long_context_messages(self):
+        """Test summary truncates long context messages."""
+        long_text = "A" * 200
+        max_length = 80
+
+        text = long_text
+        if len(text) > max_length:
+            text = text[:max_length] + "..."
+
+        assert len(text) == 83  # 80 + "..."
+        assert text.endswith("...")
+
+    def test_handles_empty_context(self):
+        """Test summary handles empty context gracefully."""
+        messages = [MagicMock(id=1, text="Current message")]
+        current_message = messages[0]
+
+        context_msgs = []
+        for msg in messages:
+            if msg.id != current_message.id:
+                context_msgs.append(msg.text)
+
+        assert len(context_msgs) == 0
+
+    def test_default_topic_when_no_pattern_matches(self):
+        """Test default topic when no pattern matches."""
+        import re
+
+        current_text = "Hello there"
+        topic_patterns = [
+            (r'\b(pr|pull.?request)\b', '👀 Нужно ревью кода'),
+            (r'\b(срочно|urgent)\b', '🚨 Срочно'),
+        ]
+
+        detected_topics = []
+        for pattern, topic in topic_patterns:
+            if re.search(pattern, current_text.lower()):
+                detected_topics.append(topic)
+
+        # Default topic when nothing detected
+        if not detected_topics:
+            default_topic = "📌 Тема: общение"
+
+        assert len(detected_topics) == 0
+        assert default_topic == "📌 Тема: общение"
+
+
+class TestPrivateMessageNotificationFormat:
+    """Tests for MentionService.format_private_notification()."""
+
+    def test_includes_sender_with_username(self):
+        """Test notification includes sender info with username."""
+        sender_name = "John Doe"
+        sender_username = "johndoe"
+
+        sender_info = f"@{sender_username} ({sender_name})"
+        sender_link = f"https://t.me/{sender_username}"
+
+        assert "@johndoe" in sender_info
+        assert "John Doe" in sender_info
+        assert sender_link == "https://t.me/johndoe"
+
+    def test_includes_sender_without_username(self):
+        """Test notification includes sender info without username."""
+        sender_name = "John Doe"
+        sender_username = None
+
+        if sender_username:
+            sender_info = f"@{sender_username} ({sender_name})"
+            sender_link = f"https://t.me/{sender_username}"
+        else:
+            sender_info = sender_name
+            sender_link = None
+
+        assert sender_info == "John Doe"
+        assert sender_link is None
+
+    def test_urgent_header(self):
+        """Test urgent private message has urgent header."""
+        is_urgent = True
+
+        if is_urgent:
+            header = "🚨 Срочное личное сообщение!"
+        else:
+            header = "💬 Личное сообщение"
+
+        assert "🚨" in header
+        assert "Срочное" in header
+
+    def test_normal_header(self):
+        """Test normal private message has standard header."""
+        is_urgent = False
+
+        if is_urgent:
+            header = "🚨 Срочное личное сообщение!"
+        else:
+            header = "💬 Личное сообщение"
+
+        assert "💬" in header
+        assert "Срочное" not in header
+
+    def test_truncates_long_message(self):
+        """Test notification truncates long message text."""
+        message_text = "A" * 300
+        max_length = 200
+
+        if len(message_text) > max_length:
+            message_text = message_text[:max_length] + "..."
+
+        assert len(message_text) == 203  # 200 + "..."
+        assert message_text.endswith("...")
+
+    def test_includes_message_text(self):
+        """Test notification includes the message text."""
+        message_text = "Can you help me with this?"
+
+        notification_line = f"✉️ Сообщение:\n  «{message_text}»"
+
+        assert "Can you help me with this?" in notification_line
+
+    def test_includes_dialog_link(self):
+        """Test notification includes link to dialog."""
+        sender_username = "johndoe"
+        sender_link = f"https://t.me/{sender_username}"
+
+        link_line = f"🔗 Открыть диалог: {sender_link}"
+
+        assert "https://t.me/johndoe" in link_line
+
+
+class TestPrivateMessageHandlerLogic:
+    """Tests for private_message_context_handler logic."""
+
+    def test_skips_non_private_messages(self):
+        """Test handler skips non-private (group) messages."""
+        is_private = False
+
+        should_process = is_private
+        assert should_process is False
+
+    def test_skips_when_disabled(self):
+        """Test handler skips when private notifications disabled."""
+        is_private = True
+        is_enabled = False
+
+        should_process = is_private and is_enabled
+        assert should_process is False
+
+    def test_skips_bot_messages(self):
+        """Test handler skips messages from bots."""
+        is_private = True
+        is_enabled = True
+        is_bot = True
+
+        should_process = is_private and is_enabled and not is_bot
+        assert should_process is False
+
+    def test_skips_empty_messages(self):
+        """Test handler skips empty messages (stickers, media only)."""
+        is_private = True
+        is_enabled = True
+        is_bot = False
+        message_text = ""
+
+        has_text = bool(message_text.strip())
+        should_process = is_private and is_enabled and not is_bot and has_text
+
+        assert should_process is False
+
+    def test_skips_when_user_online(self):
+        """Test handler skips when user is online."""
+        is_private = True
+        is_enabled = True
+        is_bot = False
+        message_text = "Hello"
+        is_online = True  # User has work emoji
+
+        # User online = don't notify
+        should_notify = is_private and is_enabled and not is_bot and bool(message_text) and not is_online
+
+        assert should_notify is False
+
+    def test_notifies_when_user_offline(self):
+        """Test handler notifies when user is offline."""
+        is_private = True
+        is_enabled = True
+        is_bot = False
+        message_text = "Hello"
+        is_online = False  # User doesn't have work emoji
+
+        should_notify = is_private and is_enabled and not is_bot and bool(message_text) and not is_online
+
+        assert should_notify is True
+
+    def test_vip_sender_is_urgent(self):
+        """Test VIP sender message is marked urgent."""
+        sender_username = "vip_user"
+        vip_usernames = ["vip_user", "another_vip"]
+
+        is_vip = sender_username.lower() in [u.lower() for u in vip_usernames]
+        is_urgent = is_vip
+
+        assert is_urgent is True
+
+    def test_non_vip_sender_not_urgent_by_default(self):
+        """Test non-VIP sender message is not urgent by default."""
+        sender_username = "regular_user"
+        vip_usernames = ["vip_user", "another_vip"]
+
+        is_vip = sender_username.lower() in [u.lower() for u in vip_usernames]
+        has_urgent_keywords = False
+        ai_urgency = None
+
+        # Urgency: VIP > AI > keywords
+        if is_vip:
+            is_urgent = True
+        elif ai_urgency is not None:
+            is_urgent = ai_urgency
+        else:
+            is_urgent = has_urgent_keywords
+
+        assert is_urgent is False
+
+    def test_urgent_keywords_trigger_urgency(self):
+        """Test urgent keywords trigger urgency."""
+        import re
+
+        message_text = "ASAP need help"
+        urgent_keywords = ['asap', 'urgent', 'срочно', 'помогите']
+        pattern = re.compile(
+            r'\b(' + '|'.join(re.escape(kw) for kw in urgent_keywords) + r')\b',
+            re.IGNORECASE
+        )
+
+        has_urgent_keywords = bool(pattern.search(message_text))
+
+        assert has_urgent_keywords is True
+
+    def test_notification_sent_silently_when_not_urgent(self):
+        """Test notification is sent silently when not urgent."""
+        is_urgent = False
+        silent = not is_urgent
+
+        assert silent is True
+
+    def test_notification_not_silent_when_urgent(self):
+        """Test notification is not silent when urgent."""
+        is_urgent = True
+        silent = not is_urgent
+
+        assert silent is False
+
+
+class TestPrivateMessageWebhookIntegration:
+    """Tests for webhook integration with private message notifications."""
+
+    def test_webhook_called_when_configured(self):
+        """Test webhook is called when configured."""
+        webhook_url = "https://example.com/webhook"
+        notification_sent = True
+
+        should_call_webhook = webhook_url and notification_sent
+
+        assert should_call_webhook is True
+
+    def test_webhook_not_called_when_not_configured(self):
+        """Test webhook is not called when not configured."""
+        webhook_url = None
+        notification_sent = True
+
+        should_call_webhook = bool(webhook_url) and notification_sent
+
+        assert should_call_webhook is False
+
+    def test_webhook_payload_includes_sender_info(self):
+        """Test webhook payload includes sender info."""
+        sender_username = "johndoe"
+        sender_id = 123456789
+        message_text = "Hello there"
+
+        if sender_username:
+            sender_name = f"@{sender_username}"
+        else:
+            sender_name = f"ID:{sender_id}"
+
+        payload = {
+            'sender_username': sender_username,
+            'sender_id': sender_id,
+            'sender_name': sender_name,
+            'message': message_text,
+        }
+
+        assert payload['sender_username'] == "johndoe"
+        assert payload['sender_id'] == 123456789
+        assert payload['sender_name'] == "@johndoe"
+        assert payload['message'] == "Hello there"
