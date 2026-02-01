@@ -120,8 +120,8 @@ class Config:
         default_factory=lambda: os.environ.get('PRODUCTIVITY_SUMMARY_TIME') or None
     )
 
-    # CalDAV calendar integration settings
-    # How often to check calendar (in seconds, default: 60)
+    # CalDAV calendar integration - how often to check calendar (in seconds)
+    # CalDAV connection settings are configured via bot interface
     caldav_check_interval: int = field(
         default_factory=lambda: int(os.environ.get('CALDAV_CHECK_INTERVAL', '60'))
     )

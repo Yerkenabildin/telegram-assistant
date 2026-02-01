@@ -282,7 +282,11 @@ async def productivity_summary_scheduler():
 # =============================================================================
 
 async def calendar_checker():
-    """Background task that monitors CalDAV calendar for meetings."""
+    """Background task that monitors CalDAV calendar for meetings.
+
+    Configuration is stored in Settings and can be changed at runtime via bot.
+    Uses meeting_emoji_id (same as Meeting API) for the meeting status.
+    """
     logger.info("Starting calendar checker...")
 
     # Wait for client to be authorized
@@ -541,7 +545,6 @@ if __name__ == '__main__':
     logger.info(f"Bot: {'enabled' if config.bot_token else 'disabled'}")
     if config.allowed_username:
         logger.info(f"Allowed username: @{config.allowed_username}")
-    logger.info(f"CalDAV: {'configured' if caldav_service.is_configured() else 'not configured'}")
     logger.info("==========================")
 
     try:

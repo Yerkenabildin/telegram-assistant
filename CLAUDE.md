@@ -201,24 +201,22 @@ Priority: Meeting (50) is above Work (10) but below Override (100), so vacation 
 
 ## CalDAV Calendar Integration
 
-Automatically set meeting status based on calendar events.
+Automatically set meeting status based on calendar events. All configuration is done via bot interface.
 
 ### Setup
 
-1. Configure CalDAV environment variables:
-   ```bash
-   CALDAV_URL=https://caldav.yandex.ru  # or your CalDAV server
-   CALDAV_USERNAME=your@email.com
-   CALDAV_PASSWORD=your-app-password    # use app-specific password
-   CALDAV_CALENDAR_NAME=Work            # optional, uses first calendar if not set
-   ```
+1. Open bot → **📆 Календарь** → **⚙️ Настроить CalDAV**
 
-2. Set calendar meeting emoji via bot:
-   - Open bot → 📆 Календарь → 🎨 Emoji для встреч
-   - Send custom emoji that will be used during calendar events
+2. Configure connection:
+   - **🌐 URL сервера** — CalDAV server URL
+   - **👤 Логин** — username (usually email)
+   - **🔑 Пароль** — password or app-specific password
 
-3. Enable sync (enabled by default when configured):
-   - Bot → 📆 Календарь → 🟢 Синхронизация вкл
+3. Set meeting emoji (used for both calendar and Meeting API):
+   - Bot → **📅 Расписание** → configure meeting emoji
+
+4. Test connection:
+   - Bot → **📆 Календарь** → **🔗 Проверить подключение**
 
 ### How it works
 
@@ -238,19 +236,17 @@ Calendar event ends:
 
 ### Features
 
-- **Keyword filtering**: Only trigger on events containing specific keywords
-  - Set `CALDAV_MEETING_KEYWORDS=meeting,call,standup` to filter events
-  - If empty, all calendar events trigger meeting status
+- **Bot configuration**: All settings are done via bot interface, no environment variables needed
 - **All-day events**: Supported, treated as 00:00-23:59
 - **Priority**: Calendar meetings use PRIORITY_MEETING (50)
   - Higher than work schedule (10)
   - Lower than manual overrides (100)
-- **Fallback emoji**: Uses meeting emoji from bot settings if not configured separately
+- **Shared emoji**: Uses the same meeting emoji as Meeting API
 
 ### Supported CalDAV servers
 
 - Yandex Calendar: `https://caldav.yandex.ru`
-- Google Calendar: `https://www.googleapis.com/caldav/v2/calendars/` (requires app password)
+- Google Calendar: `https://apidata.googleusercontent.com/caldav/v2` (requires app password)
 - iCloud: `https://caldav.icloud.com`
 - Nextcloud: `https://your-server.com/remote.php/dav/calendars/`
 - Any standard CalDAV server

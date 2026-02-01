@@ -2,6 +2,7 @@
 CalDAV calendar integration service.
 
 Checks for active calendar events and manages meeting status accordingly.
+Settings are stored in database and configured via bot interface.
 """
 from __future__ import annotations
 
@@ -32,35 +33,39 @@ class CalendarEvent:
     end: datetime
     description: Optional[str] = None
 
-    def is_meeting(self, keywords: list[str]) -> bool:
-        """Check if this event is a meeting based on keywords.
-
-        If no keywords configured, all events are considered meetings.
-        """
-        if not keywords:
-            return True
-
-        text = f"{self.summary} {self.description or ''}".lower()
-        return any(kw in text for kw in keywords)
-
 
 class CalDAVService:
-    """Service for interacting with CalDAV calendar."""
+    """Service for interacting with CalDAV calendar.
+
+    Configuration is stored in Settings database and can be
+    updated at runtime via bot interface.
+    """
 
     def __init__(self):
         self._client: Optional[caldav.DAVClient] = None
         self._calendar: Optional[caldav.Calendar] = None
         self._last_event_uid: Optional[str] = None
         self._tz = ZoneInfo(config.timezone)
+        # Cache connection params to detect changes
+        self._connected_url: Optional[str] = None
+        self._connected_user: Optional[str] = None
 
     def is_configured(self) -> bool:
-        """Check if CalDAV is properly configured."""
+        """Check if CalDAV is properly configured (in Settings)."""
         if not CALDAV_AVAILABLE:
             return False
-        return bool(
-            config.caldav_url and
-            config.caldav_username and
-            config.caldav_password
+        # Import here to avoid circular import
+        from models import Settings
+        return Settings.is_caldav_configured()
+
+    def _needs_reconnect(self) -> bool:
+        """Check if connection params changed and we need to reconnect."""
+        from models import Settings
+        current_url = Settings.get_caldav_url()
+        current_user = Settings.get_caldav_username()
+        return (
+            current_url != self._connected_url or
+            current_user != self._connected_user
         )
 
     async def connect(self) -> bool:
@@ -81,11 +86,21 @@ class CalDAVService:
 
     def _connect_sync(self) -> bool:
         """Synchronous connection to CalDAV server."""
+        from models import Settings
+
+        url = Settings.get_caldav_url()
+        username = Settings.get_caldav_username()
+        password = Settings.get_caldav_password()
+        calendar_name = Settings.get_caldav_calendar_name()
+
+        if not url or not username or not password:
+            return False
+
         try:
             self._client = caldav.DAVClient(
-                url=config.caldav_url,
-                username=config.caldav_username,
-                password=config.caldav_password
+                url=url,
+                username=username,
+                password=password
             )
 
             principal = self._client.principal()
@@ -96,19 +111,23 @@ class CalDAVService:
                 return False
 
             # Find calendar by name or use first one
-            if config.caldav_calendar_name:
+            if calendar_name:
                 for cal in calendars:
-                    if cal.name == config.caldav_calendar_name:
+                    if cal.name == calendar_name:
                         self._calendar = cal
                         break
                 if not self._calendar:
                     logger.warning(
-                        f"Calendar '{config.caldav_calendar_name}' not found, "
+                        f"Calendar '{calendar_name}' not found, "
                         f"using first available: {calendars[0].name}"
                     )
                     self._calendar = calendars[0]
             else:
                 self._calendar = calendars[0]
+
+            # Cache connection params
+            self._connected_url = url
+            self._connected_user = username
 
             logger.info(f"Connected to CalDAV calendar: {self._calendar.name}")
             return True
@@ -117,14 +136,28 @@ class CalDAVService:
             logger.error(f"CalDAV connection error: {e}")
             self._client = None
             self._calendar = None
+            self._connected_url = None
+            self._connected_user = None
             return False
+
+    def disconnect(self):
+        """Disconnect from CalDAV server."""
+        self._client = None
+        self._calendar = None
+        self._connected_url = None
+        self._connected_user = None
+        self._last_event_uid = None
 
     async def get_current_event(self) -> Optional[CalendarEvent]:
         """Get currently active calendar event.
 
-        Returns the first active event that matches meeting keywords,
-        or None if no active meeting.
+        Returns the first active event, or None if no active meeting.
         """
+        # Check if we need to reconnect (settings changed)
+        if self._calendar and self._needs_reconnect():
+            logger.info("CalDAV settings changed, reconnecting...")
+            self.disconnect()
+
         if not self._calendar:
             if not await self.connect():
                 return None
@@ -161,13 +194,12 @@ class CalDAVService:
         if not events:
             return None
 
-        # Parse events and find active meetings
+        # Parse events and find active ones
         for event in events:
             try:
                 cal_event = self._parse_event(event)
                 if cal_event and self._is_event_active(cal_event, now):
-                    if cal_event.is_meeting(config.caldav_meeting_keywords):
-                        return cal_event
+                    return cal_event
             except Exception as e:
                 logger.warning(f"Error parsing calendar event: {e}")
                 continue
@@ -247,6 +279,30 @@ class CalDAVService:
     def clear_state(self):
         """Clear internal state (e.g., when disabling calendar sync)."""
         self._last_event_uid = None
+
+    async def test_connection(self) -> tuple[bool, str]:
+        """Test CalDAV connection and return result with message.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if not CALDAV_AVAILABLE:
+            return False, "Библиотека caldav не установлена"
+
+        if not self.is_configured():
+            return False, "CalDAV не настроен"
+
+        # Force reconnect for testing
+        self.disconnect()
+
+        try:
+            if await self.connect():
+                calendar_name = self._calendar.name if self._calendar else "Unknown"
+                return True, f"Подключено к календарю: {calendar_name}"
+            else:
+                return False, "Не удалось подключиться"
+        except Exception as e:
+            return False, f"Ошибка: {e}"
 
 
 # Global service instance

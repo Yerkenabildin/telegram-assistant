@@ -180,13 +180,9 @@ def get_main_menu_keyboard():
         [Button.inline("📝 Автоответы", b"replies")],
         [Button.inline("🔔 Контекст призыва", b"mentions")],
         [Button.inline("📊 Продуктивность", b"productivity")],
+        [Button.inline("📆 Календарь", b"calendar")],
+        [Button.inline("⚙️ Настройки", b"settings")],
     ]
-
-    # Show calendar button if CalDAV is configured
-    if Settings.is_caldav_configured():
-        buttons.append([Button.inline("📆 Календарь", b"calendar")])
-
-    buttons.append([Button.inline("⚙️ Настройки", b"settings")])
 
     return buttons
 
@@ -323,18 +319,21 @@ def get_settings_keyboard():
 
 def get_calendar_keyboard():
     """Calendar sync management keyboard."""
+    is_configured = Settings.is_caldav_configured()
     is_enabled = Settings.is_calendar_sync_enabled()
-    toggle_text = "🟢 Синхронизация вкл" if is_enabled else "🔴 Синхронизация выкл"
-    toggle_data = b"calendar_off" if is_enabled else b"calendar_on"
 
-    calendar_emoji = Settings.get_calendar_meeting_emoji()
-    emoji_text = "🎨 Emoji для встреч ✓" if calendar_emoji else "🎨 Emoji для встреч"
+    buttons = []
 
-    return [
-        [Button.inline(toggle_text, toggle_data)],
-        [Button.inline(emoji_text, b"calendar_emoji")],
-        [Button.inline("« Назад", b"main")],
-    ]
+    if is_configured:
+        toggle_text = "🟢 Синхронизация вкл" if is_enabled else "🔴 Синхронизация выкл"
+        toggle_data = b"calendar_off" if is_enabled else b"calendar_on"
+        buttons.append([Button.inline(toggle_text, toggle_data)])
+        buttons.append([Button.inline("🔗 Проверить подключение", b"calendar_test")])
+
+    buttons.append([Button.inline("⚙️ Настроить CalDAV", b"calendar_setup")])
+    buttons.append([Button.inline("« Назад", b"main")])
+
+    return buttons
 
 
 def get_mentions_keyboard():
@@ -1430,8 +1429,11 @@ def register_bot_handlers(bot, user_client=None):
     # Calendar
     # =========================================================================
 
-    # Pending calendar emoji setup
-    _pending_calendar_emoji: set[int] = set()
+    # Pending CalDAV setup states
+    _pending_caldav_url: set[int] = set()
+    _pending_caldav_username: set[int] = set()
+    _pending_caldav_password: set[int] = set()
+    _pending_caldav_calendar: set[int] = set()
 
     @bot.on(events.CallbackQuery(data=b"calendar"))
     async def calendar_menu(event):
@@ -1440,23 +1442,36 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
+        is_configured = Settings.is_caldav_configured()
         is_enabled = Settings.is_calendar_sync_enabled()
-        calendar_emoji = Settings.get_calendar_meeting_emoji()
+        meeting_emoji = Settings.get('meeting_emoji_id')
 
-        status = "🟢 Включена" if is_enabled else "🔴 Выключена"
-        emoji_info = f"`{calendar_emoji}`" if calendar_emoji else "не настроен"
+        if is_configured:
+            url = Settings.get_caldav_url() or ""
+            # Hide URL details for privacy
+            url_display = url.split("//")[-1].split("/")[0] if url else "не указан"
+            calendar_name = Settings.get_caldav_calendar_name() or "первый доступный"
 
-        text = (
-            "📆 **Синхронизация с календарём**\n\n"
-            f"**Статус:** {status}\n"
-            f"**Emoji для встреч:** {emoji_info}\n\n"
-            "При начале события в календаре автоматически "
-            "включается статус встречи. После окончания — "
-            "восстанавливается расписание."
-        )
+            status = "🟢 Включена" if is_enabled else "🔴 Выключена"
+            emoji_status = f"`{meeting_emoji}`" if meeting_emoji else "❌ не настроен (задайте в Расписание)"
 
-        if config.caldav_calendar_name:
-            text += f"\n\n**Календарь:** {config.caldav_calendar_name}"
+            text = (
+                "📆 **Синхронизация с календарём**\n\n"
+                f"**Статус:** {status}\n"
+                f"**Сервер:** {url_display}\n"
+                f"**Календарь:** {calendar_name}\n"
+                f"**Emoji встречи:** {emoji_status}\n\n"
+                "При начале события в календаре автоматически "
+                "включается статус встречи. После окончания — "
+                "восстанавливается расписание."
+            )
+        else:
+            text = (
+                "📆 **Синхронизация с календарём**\n\n"
+                "⚠️ CalDAV не настроен\n\n"
+                "Настройте подключение к календарю для "
+                "автоматического изменения статуса во время встреч."
+            )
 
         await event.edit(text, buttons=get_calendar_keyboard())
 
@@ -1465,6 +1480,10 @@ def register_bot_handlers(bot, user_client=None):
         """Enable calendar sync."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        if not Settings.is_caldav_configured():
+            await event.answer("❌ Сначала настройте CalDAV", alert=True)
             return
 
         Settings.set_calendar_sync_enabled(True)
@@ -1481,42 +1500,154 @@ def register_bot_handlers(bot, user_client=None):
             return
 
         Settings.set_calendar_sync_enabled(False)
+        caldav_service.clear_state()
         logger.info("Calendar sync disabled via bot")
 
         await event.answer("🔴 Синхронизация выключена")
         await calendar_menu(event)
 
-    @bot.on(events.CallbackQuery(data=b"calendar_emoji"))
-    async def calendar_emoji_start(event):
-        """Start setting calendar meeting emoji."""
+    @bot.on(events.CallbackQuery(data=b"calendar_test"))
+    async def calendar_test(event):
+        """Test CalDAV connection."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        current_emoji = Settings.get_calendar_meeting_emoji()
-        current_info = f"\n\nТекущий emoji: `{current_emoji}`" if current_emoji else ""
+        await event.answer("🔄 Проверяю подключение...")
 
-        _pending_calendar_emoji.add(event.sender_id)
+        success, message = await caldav_service.test_connection()
 
-        await event.edit(
-            "🎨 **Emoji для событий календаря**\n\n"
-            "Отправьте кастомный emoji, который будет "
-            "устанавливаться во время событий из календаря."
-            f"{current_info}",
-            buttons=[
-                [Button.inline("❌ Отмена", b"calendar_emoji_cancel")],
-            ]
+        if success:
+            await event.answer(f"✅ {message}", alert=True)
+        else:
+            await event.answer(f"❌ {message}", alert=True)
+
+    @bot.on(events.CallbackQuery(data=b"calendar_setup"))
+    async def calendar_setup_menu(event):
+        """Show CalDAV setup menu."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        url = Settings.get_caldav_url()
+        username = Settings.get_caldav_username()
+        password = Settings.get_caldav_password()
+        calendar = Settings.get_caldav_calendar_name()
+
+        url_status = "✅" if url else "❌"
+        user_status = "✅" if username else "❌"
+        pass_status = "✅" if password else "❌"
+        cal_status = "✅" if calendar else "➖"
+
+        text = (
+            "⚙️ **Настройка CalDAV**\n\n"
+            f"{url_status} URL сервера: {url or 'не указан'}\n"
+            f"{user_status} Логин: {username or 'не указан'}\n"
+            f"{pass_status} Пароль: {'••••••' if password else 'не указан'}\n"
+            f"{cal_status} Календарь: {calendar or 'авто'}\n\n"
+            "**Примеры серверов:**\n"
+            "• Яндекс: `https://caldav.yandex.ru`\n"
+            "• Google: `https://apidata.googleusercontent.com/caldav/v2`\n"
+            "• iCloud: `https://caldav.icloud.com`"
         )
 
-    @bot.on(events.CallbackQuery(data=b"calendar_emoji_cancel"))
-    async def calendar_emoji_cancel(event):
-        """Cancel calendar emoji setup."""
+        buttons = [
+            [Button.inline("🌐 URL сервера", b"caldav_url")],
+            [Button.inline("👤 Логин", b"caldav_user")],
+            [Button.inline("🔑 Пароль", b"caldav_pass")],
+            [Button.inline("📅 Календарь (опц.)", b"caldav_calendar")],
+            [Button.inline("« Назад", b"calendar")],
+        ]
+
+        await event.edit(text, buttons=buttons)
+
+    @bot.on(events.CallbackQuery(data=b"caldav_url"))
+    async def caldav_url_start(event):
+        """Start setting CalDAV URL."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        _pending_calendar_emoji.discard(event.sender_id)
-        await calendar_menu(event)
+        _pending_caldav_url.add(event.sender_id)
+
+        current = Settings.get_caldav_url()
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            "🌐 **URL CalDAV сервера**\n\n"
+            "Отправьте URL вашего CalDAV сервера."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_user"))
+    async def caldav_user_start(event):
+        """Start setting CalDAV username."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_username.add(event.sender_id)
+
+        current = Settings.get_caldav_username()
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            "👤 **Логин CalDAV**\n\n"
+            "Отправьте логин (обычно email)."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_pass"))
+    async def caldav_pass_start(event):
+        """Start setting CalDAV password."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_password.add(event.sender_id)
+
+        await event.edit(
+            "🔑 **Пароль CalDAV**\n\n"
+            "Отправьте пароль или пароль приложения.\n\n"
+            "⚠️ Для Google/Яндекс используйте пароль приложения.",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_calendar"))
+    async def caldav_calendar_start(event):
+        """Start setting CalDAV calendar name."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_calendar.add(event.sender_id)
+
+        current = Settings.get_caldav_calendar_name()
+        current_info = f"\n\nТекущий: `{current}`" if current else ""
+
+        await event.edit(
+            "📅 **Название календаря**\n\n"
+            "Отправьте название календаря или `-` для авто-выбора.\n\n"
+            "Если не указать, будет использован первый доступный."
+            f"{current_info}",
+            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"caldav_cancel"))
+    async def caldav_cancel(event):
+        """Cancel CalDAV setup."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        _pending_caldav_url.discard(event.sender_id)
+        _pending_caldav_username.discard(event.sender_id)
+        _pending_caldav_password.discard(event.sender_id)
+        _pending_caldav_calendar.discard(event.sender_id)
+
+        await calendar_setup_menu(event)
 
     # =========================================================================
     # Settings
@@ -2256,27 +2387,97 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
-        # Check if user is setting calendar meeting emoji
-        if event.sender_id in _pending_calendar_emoji:
-            entities = event.message.entities or []
-            custom_emojis = [e for e in entities if isinstance(e, MessageEntityCustomEmoji)]
+        # Check if user is setting CalDAV URL
+        if event.sender_id in _pending_caldav_url:
+            text = event.message.text.strip() if event.message.text else ""
 
-            if not custom_emojis:
+            if not text.startswith("http"):
                 await event.respond(
-                    "❌ Отправьте сообщение с кастомным эмодзи.",
-                    buttons=[[Button.inline("❌ Отмена", b"calendar_emoji_cancel")]]
+                    "❌ URL должен начинаться с http:// или https://",
+                    buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
                 )
                 return
 
-            emoji_id = custom_emojis[0].document_id
-
-            Settings.set_calendar_meeting_emoji(str(emoji_id))
-            _pending_calendar_emoji.discard(event.sender_id)
-            logger.info(f"Calendar meeting emoji set to {emoji_id}")
+            Settings.set_caldav_url(text)
+            _pending_caldav_url.discard(event.sender_id)
+            caldav_service.disconnect()  # Force reconnect with new settings
+            logger.info(f"CalDAV URL set to {text}")
 
             await event.respond(
-                f"✅ Emoji для событий календаря установлен!",
-                buttons=get_calendar_keyboard()
+                "✅ URL сервера сохранён!",
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting CalDAV username
+        if event.sender_id in _pending_caldav_username:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if not text:
+                await event.respond(
+                    "❌ Введите логин",
+                    buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+                )
+                return
+
+            Settings.set_caldav_username(text)
+            _pending_caldav_username.discard(event.sender_id)
+            caldav_service.disconnect()
+            logger.info(f"CalDAV username set")
+
+            await event.respond(
+                "✅ Логин сохранён!",
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting CalDAV password
+        if event.sender_id in _pending_caldav_password:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if not text:
+                await event.respond(
+                    "❌ Введите пароль",
+                    buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+                )
+                return
+
+            Settings.set_caldav_password(text)
+            _pending_caldav_password.discard(event.sender_id)
+            caldav_service.disconnect()
+            logger.info("CalDAV password set")
+
+            # Delete the message with password for security
+            try:
+                await event.message.delete()
+            except Exception:
+                pass
+
+            await bot.send_message(
+                event.sender_id,
+                "✅ Пароль сохранён!",
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
+            )
+            return
+
+        # Check if user is setting CalDAV calendar name
+        if event.sender_id in _pending_caldav_calendar:
+            text = event.message.text.strip() if event.message.text else ""
+
+            if text == "-" or not text:
+                Settings.set_caldav_calendar_name(None)
+                msg = "✅ Будет использован первый доступный календарь"
+            else:
+                Settings.set_caldav_calendar_name(text)
+                msg = f"✅ Календарь установлен: {text}"
+
+            _pending_caldav_calendar.discard(event.sender_id)
+            caldav_service.disconnect()
+            logger.info(f"CalDAV calendar name set to {text or 'auto'}")
+
+            await event.respond(
+                msg,
+                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
             )
             return
 
