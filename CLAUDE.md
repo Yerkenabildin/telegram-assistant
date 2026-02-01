@@ -162,6 +162,7 @@ Main Telethon event handlers in `handlers.py`:
 | `setup_response_current_status` | `/set` | Outgoing | Settings chat | Bind current status to reply |
 | `asap_handler` | `.*ASAP.*` | Incoming | Private | Urgent notification |
 | `group_mention_handler` | All | Incoming | Groups | Mention notifications |
+| `private_message_context_handler` | All | Incoming | Private | Private message context notifications |
 | `new_messages` | All | Incoming | Private | Auto-reply logic |
 
 Bot handlers in `bot_handlers.py` provide inline keyboard interface for the same functionality.
@@ -476,6 +477,63 @@ Without Yandex GPT, the bot falls back to keyword-based topic detection and urge
    YANDEX_FOLDER_ID=your-folder-id
    YANDEX_GPT_MODEL=yandexgpt  # or yandexgpt-lite for faster/cheaper responses
    ```
+
+## Private Message Notifications
+
+The bot can send notifications about incoming private messages from VIP senders with context.
+
+### Flow
+```
+Incoming private message:
+├─ Check: Is private notification enabled?
+│  └─ No → Exit
+├─ Check: Is sender a bot?
+│  └─ Yes → Exit
+├─ Check: Is sender a VIP?
+│  └─ No → Exit (only VIP senders trigger notifications)
+├─ Check: Is message empty (sticker, media only)?
+│  └─ Yes → Exit
+├─ Determine online status (has work/meeting emoji?)
+├─ Fetch recent messages from conversation for context
+├─ Generate summary (AI or keyword-based)
+└─ Send notification:
+   ├─ Online (work/meeting emoji) → via bot
+   └─ Offline → via user client to PERSONAL_TG_LOGIN
+```
+
+### Notification Format
+```
+🚨 Срочное личное сообщение!  (or 💬 Личное сообщение)
+
+👤 От: @username (Name)
+
+📌 Тема:
+  🆘 Нужна помощь
+
+💬 Контекст разговора:
+  «Previous message 1»
+  «Previous message 2»
+
+✉️ Сообщение:
+  «Can you help me with this?»
+
+🔗 Открыть диалог: https://t.me/username
+```
+
+### Configuration
+
+**Via Bot Interface:**
+1. Open bot menu → 🔔 Контекст призыва → 💬 Личные сообщения
+2. Enable/disable private message notifications
+
+**Database setting:**
+- `private_notification_enabled` - Enable/disable private message notifications (default: false)
+
+**Webhook integration:**
+- If `ASAP_WEBHOOK_URL` is configured and message contains "ASAP", webhook will be called
+- Uses the same webhook format as ASAP notifications
+
+Note: Same urgency detection and VIP sender logic applies as for group mentions.
 
 ## Daily Productivity Summary
 

@@ -279,6 +279,21 @@ class Settings(Model):
         Settings.set('online_mention_delay', str(minutes))
 
     # =========================================================================
+    # Private Message Notification Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_private_notification_enabled() -> bool:
+        """Check if private message notifications are enabled (default: False)."""
+        value = Settings.get('private_notification_enabled')
+        return value == 'true'
+
+    @staticmethod
+    def set_private_notification_enabled(enabled: bool) -> None:
+        """Enable or disable private message notifications."""
+        Settings.set('private_notification_enabled', 'true' if enabled else 'false')
+
+    # =========================================================================
     # Productivity Summary Settings
     # =========================================================================
 

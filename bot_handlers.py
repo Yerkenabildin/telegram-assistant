@@ -342,8 +342,21 @@ def get_mentions_keyboard():
     return [
         [Button.inline("📴 Во время отсутствия", b"mention_offline")],
         [Button.inline("📱 Во время онлайн", b"mention_online")],
+        [Button.inline("💬 Личные сообщения", b"mention_private")],
         [Button.inline("⭐ Приоритетные", b"mention_vip")],
         [Button.inline("« Назад", b"main")],
+    ]
+
+
+def get_mention_private_keyboard():
+    """Private message notification settings keyboard."""
+    is_enabled = Settings.is_private_notification_enabled()
+    toggle_text = "🟢 Включен" if is_enabled else "🔴 Выключен"
+    toggle_data = b"private_mention_off" if is_enabled else b"private_mention_on"
+
+    return [
+        [Button.inline(toggle_text, toggle_data)],
+        [Button.inline("« Назад", b"mentions")],
     ]
 
 
@@ -2898,6 +2911,7 @@ def register_bot_handlers(bot, user_client=None):
 
         offline_status = "✅" if Settings.is_offline_mention_enabled() else "❌"
         online_status = "✅" if Settings.is_online_mention_enabled() else "❌"
+        private_status = "✅" if Settings.is_private_notification_enabled() else "❌"
         delay = Settings.get_online_mention_delay()
         vip_count = len(VipList.get_all())
 
@@ -2908,6 +2922,7 @@ def register_bot_handlers(bot, user_client=None):
         )
         if Settings.is_online_mention_enabled() and delay > 0:
             text += f" (задержка {delay} мин)"
+        text += f"\n💬 Личные сообщения: {private_status}"
         text += f"\n⭐ Приоритетных: {vip_count}"
 
         await event.edit(text, buttons=get_mentions_keyboard())
@@ -3003,6 +3018,50 @@ def register_bot_handlers(bot, user_client=None):
         logger.info("Online mention notifications disabled")
         await event.answer("🔴 Уведомления выключены")
         await mention_online_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"mention_private"))
+    async def mention_private_menu(event):
+        """Show private message notification settings."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        is_enabled = Settings.is_private_notification_enabled()
+        status = "✅ включены" if is_enabled else "❌ выключены"
+
+        text = (
+            "💬 **Уведомления о личных сообщениях**\n\n"
+            f"Статус: {status}\n\n"
+            "Когда у вас не рабочий эмодзи-статус, вы будете\n"
+            "получать уведомления о новых личных сообщениях\n"
+            "с контекстом переписки."
+        )
+
+        await event.edit(text, buttons=get_mention_private_keyboard())
+
+    @bot.on(events.CallbackQuery(data=b"private_mention_on"))
+    async def private_mention_enable(event):
+        """Enable private message notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_private_notification_enabled(True)
+        logger.info("Private message notifications enabled")
+        await event.answer("✅ Уведомления включены")
+        await mention_private_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"private_mention_off"))
+    async def private_mention_disable(event):
+        """Disable private message notifications."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_private_notification_enabled(False)
+        logger.info("Private message notifications disabled")
+        await event.answer("🔴 Уведомления выключены")
+        await mention_private_menu(event)
 
     # Store users waiting to input delay
     _pending_delay_edit: set[int] = set()
