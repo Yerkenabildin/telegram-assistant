@@ -1433,7 +1433,6 @@ def register_bot_handlers(bot, user_client=None):
     _pending_caldav_url: set[int] = set()
     _pending_caldav_username: set[int] = set()
     _pending_caldav_password: set[int] = set()
-    _pending_caldav_calendar: set[int] = set()
 
     @bot.on(events.CallbackQuery(data=b"calendar"))
     async def calendar_menu(event):
@@ -1532,19 +1531,23 @@ def register_bot_handlers(bot, user_client=None):
         url = Settings.get_caldav_url()
         username = Settings.get_caldav_username()
         password = Settings.get_caldav_password()
-        calendar = Settings.get_caldav_calendar_name()
+        selected_calendars = Settings.get_caldav_calendars()
 
         url_status = "✅" if url else "❌"
         user_status = "✅" if username else "❌"
         pass_status = "✅" if password else "❌"
-        cal_status = "✅" if calendar else "➖"
+
+        if selected_calendars:
+            cal_info = f"{len(selected_calendars)} выбрано"
+        else:
+            cal_info = "все"
 
         text = (
             "⚙️ **Настройка CalDAV**\n\n"
             f"{url_status} URL сервера: {url or 'не указан'}\n"
             f"{user_status} Логин: {username or 'не указан'}\n"
             f"{pass_status} Пароль: {'••••••' if password else 'не указан'}\n"
-            f"{cal_status} Календарь: {calendar or 'авто'}\n\n"
+            f"📅 Календари: {cal_info}\n\n"
             "**Примеры серверов:**\n"
             "• Яндекс: `https://caldav.yandex.ru`\n"
             "• Google: `https://apidata.googleusercontent.com/caldav/v2`\n"
@@ -1555,7 +1558,7 @@ def register_bot_handlers(bot, user_client=None):
             [Button.inline("🌐 URL сервера", b"caldav_url")],
             [Button.inline("👤 Логин", b"caldav_user")],
             [Button.inline("🔑 Пароль", b"caldav_pass")],
-            [Button.inline("📅 Календарь (опц.)", b"caldav_calendar")],
+            [Button.inline("📅 Выбрать календари", b"caldav_calendars")],
             [Button.inline("« Назад", b"calendar")],
         ]
 
@@ -1615,25 +1618,88 @@ def register_bot_handlers(bot, user_client=None):
             buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
         )
 
-    @bot.on(events.CallbackQuery(data=b"caldav_calendar"))
-    async def caldav_calendar_start(event):
-        """Start setting CalDAV calendar name."""
+    @bot.on(events.CallbackQuery(data=b"caldav_calendars"))
+    async def caldav_calendars_menu(event):
+        """Show available calendars for selection."""
         if not await _is_owner(event):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        _pending_caldav_calendar.add(event.sender_id)
+        if not Settings.is_caldav_configured():
+            await event.answer("❌ Сначала настройте подключение", alert=True)
+            return
 
-        current = Settings.get_caldav_calendar_name()
-        current_info = f"\n\nТекущий: `{current}`" if current else ""
+        await event.answer("🔄 Загрузка календарей...")
 
-        await event.edit(
-            "📅 **Название календаря**\n\n"
-            "Отправьте название календаря или `-` для авто-выбора.\n\n"
-            "Если не указать, будет использован первый доступный."
-            f"{current_info}",
-            buttons=[[Button.inline("❌ Отмена", b"caldav_cancel")]]
+        calendars = await caldav_service.get_available_calendars()
+
+        if not calendars:
+            await event.edit(
+                "❌ **Календари не найдены**\n\n"
+                "Не удалось получить список календарей.\n"
+                "Проверьте настройки подключения.",
+                buttons=[[Button.inline("« Назад", b"calendar_setup")]]
+            )
+            return
+
+        selected = Settings.get_caldav_calendars()
+
+        text = (
+            "📅 **Выбор календарей**\n\n"
+            "Выберите календари для отслеживания встреч.\n"
+            "Если ничего не выбрано — используются все.\n\n"
         )
+
+        if selected:
+            text += f"Выбрано: {len(selected)} из {len(calendars)}"
+        else:
+            text += f"Используются все ({len(calendars)})"
+
+        buttons = []
+        for cal in calendars:
+            is_selected = cal.name in selected
+            icon = "✅" if is_selected else "⬜"
+            callback_data = f"cal_toggle:{cal.name}".encode()
+            buttons.append([Button.inline(f"{icon} {cal.name}", callback_data)])
+
+        buttons.append([Button.inline("🔄 Сбросить выбор", b"caldav_calendars_reset")])
+        buttons.append([Button.inline("« Назад", b"calendar_setup")])
+
+        await event.edit(text, buttons=buttons)
+
+    @bot.on(events.CallbackQuery(pattern=rb"cal_toggle:(.+)"))
+    async def caldav_calendar_toggle(event):
+        """Toggle a calendar selection."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        calendar_name = event.pattern_match.group(1).decode()
+        selected = Settings.get_caldav_calendars()
+
+        if calendar_name in selected:
+            Settings.remove_caldav_calendar(calendar_name)
+            await event.answer(f"❌ {calendar_name} отключен")
+        else:
+            Settings.add_caldav_calendar(calendar_name)
+            await event.answer(f"✅ {calendar_name} включен")
+
+        # Refresh the calendar list
+        await caldav_calendars_menu(event)
+
+    @bot.on(events.CallbackQuery(data=b"caldav_calendars_reset"))
+    async def caldav_calendars_reset(event):
+        """Reset calendar selection to use all."""
+        if not await _is_owner(event):
+            await event.answer("⛔ Доступ запрещён", alert=True)
+            return
+
+        Settings.set_caldav_calendars([])
+        caldav_service.clear_state()
+        await event.answer("✅ Используются все календари")
+
+        # Refresh the calendar list
+        await caldav_calendars_menu(event)
 
     @bot.on(events.CallbackQuery(data=b"caldav_cancel"))
     async def caldav_cancel(event):
@@ -1645,7 +1711,6 @@ def register_bot_handlers(bot, user_client=None):
         _pending_caldav_url.discard(event.sender_id)
         _pending_caldav_username.discard(event.sender_id)
         _pending_caldav_password.discard(event.sender_id)
-        _pending_caldav_calendar.discard(event.sender_id)
 
         await calendar_setup_menu(event)
 
@@ -2456,27 +2521,6 @@ def register_bot_handlers(bot, user_client=None):
             await bot.send_message(
                 event.sender_id,
                 "✅ Пароль сохранён!",
-                buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
-            )
-            return
-
-        # Check if user is setting CalDAV calendar name
-        if event.sender_id in _pending_caldav_calendar:
-            text = event.message.text.strip() if event.message.text else ""
-
-            if text == "-" or not text:
-                Settings.set_caldav_calendar_name(None)
-                msg = "✅ Будет использован первый доступный календарь"
-            else:
-                Settings.set_caldav_calendar_name(text)
-                msg = f"✅ Календарь установлен: {text}"
-
-            _pending_caldav_calendar.discard(event.sender_id)
-            caldav_service.disconnect()
-            logger.info(f"CalDAV calendar name set to {text or 'auto'}")
-
-            await event.respond(
-                msg,
                 buttons=[[Button.inline("« К настройке CalDAV", b"calendar_setup")]]
             )
             return

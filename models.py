@@ -447,6 +447,43 @@ class Settings(Model):
             Settings.set('caldav_password', password)
 
     @staticmethod
+    def get_caldav_calendars() -> list[str]:
+        """Get list of active CalDAV calendar names.
+
+        Returns empty list if not configured (meaning all calendars).
+        """
+        value = Settings.get('caldav_calendars')
+        if not value:
+            return []
+        return [c.strip() for c in value.split('|') if c.strip()]
+
+    @staticmethod
+    def set_caldav_calendars(calendars: list[str]) -> None:
+        """Set list of active CalDAV calendars."""
+        if not calendars:
+            setting = Settings().selectOne(SQL().WHERE('key', '=', 'caldav_calendars'))
+            if setting:
+                setting.delete()
+        else:
+            Settings.set('caldav_calendars', '|'.join(calendars))
+
+    @staticmethod
+    def add_caldav_calendar(name: str) -> None:
+        """Add a calendar to active list."""
+        calendars = Settings.get_caldav_calendars()
+        if name not in calendars:
+            calendars.append(name)
+            Settings.set_caldav_calendars(calendars)
+
+    @staticmethod
+    def remove_caldav_calendar(name: str) -> None:
+        """Remove a calendar from active list."""
+        calendars = Settings.get_caldav_calendars()
+        if name in calendars:
+            calendars.remove(name)
+            Settings.set_caldav_calendars(calendars)
+
+    @staticmethod
     def is_caldav_configured() -> bool:
         """Check if CalDAV is fully configured."""
         return bool(

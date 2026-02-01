@@ -3,6 +3,7 @@ CalDAV calendar integration service.
 
 Checks for active calendar events and manages meeting status accordingly.
 Settings are stored in database and configured via bot interface.
+Supports multiple calendars.
 """
 from __future__ import annotations
 
@@ -25,25 +26,34 @@ except ImportError:
 
 
 @dataclass
+class CalendarInfo:
+    """Information about a calendar."""
+    name: str
+    url: str
+
+
+@dataclass
 class CalendarEvent:
     """Represents an active calendar event."""
     uid: str
     summary: str
     start: datetime
     end: datetime
+    calendar_name: str
     description: Optional[str] = None
 
 
 class CalDAVService:
-    """Service for interacting with CalDAV calendar.
+    """Service for interacting with CalDAV calendars.
 
     Configuration is stored in Settings database and can be
     updated at runtime via bot interface.
+    Supports multiple calendars.
     """
 
     def __init__(self):
         self._client: Optional[caldav.DAVClient] = None
-        self._calendar: Optional[caldav.Calendar] = None
+        self._all_calendars: list[caldav.Calendar] = []
         self._last_event_uid: Optional[str] = None
         self._tz = ZoneInfo(config.timezone)
         # Cache connection params to detect changes
@@ -54,7 +64,6 @@ class CalDAVService:
         """Check if CalDAV is properly configured (in Settings)."""
         if not CALDAV_AVAILABLE:
             return False
-        # Import here to avoid circular import
         from models import Settings
         return Settings.is_caldav_configured()
 
@@ -69,7 +78,7 @@ class CalDAVService:
         )
 
     async def connect(self) -> bool:
-        """Connect to CalDAV server and select calendar.
+        """Connect to CalDAV server and fetch all calendars.
 
         Returns True if connection successful.
         """
@@ -77,7 +86,6 @@ class CalDAVService:
             return False
 
         try:
-            # CalDAV operations are blocking, run in executor
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, self._connect_sync)
         except Exception as e:
@@ -91,7 +99,6 @@ class CalDAVService:
         url = Settings.get_caldav_url()
         username = Settings.get_caldav_username()
         password = Settings.get_caldav_password()
-        calendar_name = Settings.get_caldav_calendar_name()
 
         if not url or not username or not password:
             return False
@@ -104,38 +111,24 @@ class CalDAVService:
             )
 
             principal = self._client.principal()
-            calendars = principal.calendars()
+            self._all_calendars = principal.calendars()
 
-            if not calendars:
+            if not self._all_calendars:
                 logger.error("No calendars found on CalDAV server")
                 return False
-
-            # Find calendar by name or use first one
-            if calendar_name:
-                for cal in calendars:
-                    if cal.name == calendar_name:
-                        self._calendar = cal
-                        break
-                if not self._calendar:
-                    logger.warning(
-                        f"Calendar '{calendar_name}' not found, "
-                        f"using first available: {calendars[0].name}"
-                    )
-                    self._calendar = calendars[0]
-            else:
-                self._calendar = calendars[0]
 
             # Cache connection params
             self._connected_url = url
             self._connected_user = username
 
-            logger.info(f"Connected to CalDAV calendar: {self._calendar.name}")
+            cal_names = [c.name for c in self._all_calendars]
+            logger.info(f"Connected to CalDAV. Available calendars: {cal_names}")
             return True
 
         except Exception as e:
             logger.error(f"CalDAV connection error: {e}")
             self._client = None
-            self._calendar = None
+            self._all_calendars = []
             self._connected_url = None
             self._connected_user = None
             return False
@@ -143,22 +136,48 @@ class CalDAVService:
     def disconnect(self):
         """Disconnect from CalDAV server."""
         self._client = None
-        self._calendar = None
+        self._all_calendars = []
         self._connected_url = None
         self._connected_user = None
         self._last_event_uid = None
 
-    async def get_current_event(self) -> Optional[CalendarEvent]:
-        """Get currently active calendar event.
+    async def get_available_calendars(self) -> list[CalendarInfo]:
+        """Get list of all available calendars on the server."""
+        if self._needs_reconnect():
+            self.disconnect()
 
-        Returns the first active event, or None if no active meeting.
+        if not self._all_calendars:
+            if not await self.connect():
+                return []
+
+        return [
+            CalendarInfo(name=cal.name, url=str(cal.url))
+            for cal in self._all_calendars
+        ]
+
+    def _get_active_calendars(self) -> list[caldav.Calendar]:
+        """Get calendars to check based on Settings."""
+        from models import Settings
+
+        selected = Settings.get_caldav_calendars()
+
+        if not selected:
+            # No selection = use all calendars
+            return self._all_calendars
+
+        # Filter by selected names
+        return [c for c in self._all_calendars if c.name in selected]
+
+    async def get_current_event(self) -> Optional[CalendarEvent]:
+        """Get currently active calendar event from any active calendar.
+
+        Returns the first active event found, or None.
         """
-        # Check if we need to reconnect (settings changed)
-        if self._calendar and self._needs_reconnect():
+        if self._needs_reconnect():
             logger.info("CalDAV settings changed, reconnecting...")
             self.disconnect()
 
-        if not self._calendar:
+        if not self._all_calendars:
             if not await self.connect():
                 return None
 
@@ -167,57 +186,51 @@ class CalDAVService:
             return await loop.run_in_executor(None, self._get_current_event_sync)
         except Exception as e:
             logger.error(f"Error fetching calendar events: {e}")
-            # Reset connection on error
-            self._calendar = None
+            self._all_calendars = []
             return None
 
     def _get_current_event_sync(self) -> Optional[CalendarEvent]:
-        """Synchronously get current calendar event."""
+        """Synchronously get current calendar event from active calendars."""
         now = datetime.now(self._tz)
-
-        # Search for events in a small window around now
-        # We look 1 minute back to catch events that just started
         start = now - timedelta(minutes=1)
         end = now + timedelta(minutes=1)
 
-        try:
-            events = self._calendar.search(
-                start=start,
-                end=end,
-                event=True,
-                expand=True
-            )
-        except Exception as e:
-            logger.error(f"CalDAV search error: {e}")
-            return None
+        active_calendars = self._get_active_calendars()
 
-        if not events:
-            return None
-
-        # Parse events and find active ones
-        for event in events:
+        for calendar in active_calendars:
             try:
-                cal_event = self._parse_event(event)
-                if cal_event and self._is_event_active(cal_event, now):
-                    return cal_event
+                events = calendar.search(
+                    start=start,
+                    end=end,
+                    event=True,
+                    expand=True
+                )
+
+                for event in events:
+                    try:
+                        cal_event = self._parse_event(event, calendar.name)
+                        if cal_event and self._is_event_active(cal_event, now):
+                            return cal_event
+                    except Exception as e:
+                        logger.warning(f"Error parsing event: {e}")
+                        continue
+
             except Exception as e:
-                logger.warning(f"Error parsing calendar event: {e}")
+                logger.warning(f"Error searching calendar {calendar.name}: {e}")
                 continue
 
         return None
 
-    def _parse_event(self, event) -> Optional[CalendarEvent]:
+    def _parse_event(self, event, calendar_name: str) -> Optional[CalendarEvent]:
         """Parse caldav event into CalendarEvent dataclass."""
         try:
             vevent = event.vobject_instance.vevent
 
-            # Get event times
             dtstart = vevent.dtstart.value
             dtend = vevent.dtend.value if hasattr(vevent, 'dtend') else None
 
-            # Handle all-day events (date instead of datetime)
+            # Handle all-day events
             if not isinstance(dtstart, datetime):
-                # All-day event - convert to datetime
                 dtstart = datetime.combine(dtstart, datetime.min.time())
                 dtstart = dtstart.replace(tzinfo=self._tz)
             elif dtstart.tzinfo is None:
@@ -230,7 +243,6 @@ class CalDAVService:
                 elif dtend.tzinfo is None:
                     dtend = dtend.replace(tzinfo=self._tz)
             else:
-                # Default 1 hour duration if no end time
                 dtend = dtstart + timedelta(hours=1)
 
             summary = str(vevent.summary.value) if hasattr(vevent, 'summary') else "Untitled"
@@ -242,6 +254,7 @@ class CalDAVService:
                 summary=summary,
                 start=dtstart,
                 end=dtend,
+                calendar_name=calendar_name,
                 description=description
             )
         except Exception as e:
@@ -253,17 +266,12 @@ class CalDAVService:
         return event.start <= now <= event.end
 
     async def check_meeting_status(self) -> tuple[bool, Optional[CalendarEvent]]:
-        """Check if there's an active meeting.
-
-        Returns:
-            Tuple of (is_in_meeting, current_event)
-        """
+        """Check if there's an active meeting in any active calendar."""
         event = await self.get_current_event()
 
         if event:
-            # Track event UID to detect changes
             if event.uid != self._last_event_uid:
-                logger.info(f"Calendar meeting started: {event.summary}")
+                logger.info(f"Calendar meeting started: {event.summary} ({event.calendar_name})")
                 self._last_event_uid = event.uid
             return True, event
         else:
@@ -277,28 +285,23 @@ class CalDAVService:
         return self._last_event_uid
 
     def clear_state(self):
-        """Clear internal state (e.g., when disabling calendar sync)."""
+        """Clear internal state."""
         self._last_event_uid = None
 
     async def test_connection(self) -> tuple[bool, str]:
-        """Test CalDAV connection and return result with message.
-
-        Returns:
-            Tuple of (success, message)
-        """
+        """Test CalDAV connection."""
         if not CALDAV_AVAILABLE:
             return False, "Библиотека caldav не установлена"
 
         if not self.is_configured():
             return False, "CalDAV не настроен"
 
-        # Force reconnect for testing
         self.disconnect()
 
         try:
             if await self.connect():
-                calendar_name = self._calendar.name if self._calendar else "Unknown"
-                return True, f"Подключено к календарю: {calendar_name}"
+                count = len(self._all_calendars)
+                return True, f"Подключено. Найдено календарей: {count}"
             else:
                 return False, "Не удалось подключиться"
         except Exception as e:
