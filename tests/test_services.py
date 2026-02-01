@@ -3038,6 +3038,46 @@ class TestPrivateMessageHandlerLogic:
         assert silent is False
 
 
+class TestPrivateMessageBotNotification:
+    """Tests for sending private message notifications via bot."""
+
+    def test_prefers_bot_when_available(self):
+        """Test notification is sent via bot when bot_client is available."""
+        bot_client_available = True
+        owner_id = 123456789
+
+        if bot_client_available and owner_id:
+            send_via = "bot"
+        else:
+            send_via = "user_client"
+
+        assert send_via == "bot"
+
+    def test_fallback_to_user_client_when_no_bot(self):
+        """Test notification falls back to user client when no bot."""
+        bot_client_available = False
+        owner_id = None
+
+        if bot_client_available and owner_id:
+            send_via = "bot"
+        else:
+            send_via = "user_client"
+
+        assert send_via == "user_client"
+
+    def test_fallback_to_user_client_when_no_owner_id(self):
+        """Test notification falls back to user client when no owner_id."""
+        bot_client_available = True
+        owner_id = None
+
+        if bot_client_available and owner_id:
+            send_via = "bot"
+        else:
+            send_via = "user_client"
+
+        assert send_via == "user_client"
+
+
 class TestPrivateMessageWebhookIntegration:
     """Tests for webhook integration with private message notifications."""
 

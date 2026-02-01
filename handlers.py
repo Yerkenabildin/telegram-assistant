@@ -675,14 +675,34 @@ def register_handlers(client, bot=None):
             message_text=message_text
         )
 
-        # Send notification via user client (we're offline)
+        # Send notification via bot (preferred) or user client (fallback)
         try:
-            await client.send_message(
-                config.personal_tg_login,
-                notification,
-                silent=not is_urgent
-            )
-            logger.info(f"Private message notification sent (urgent={is_urgent})")
+            if _bot_client:
+                from bot_handlers import get_owner_id
+                owner_id = get_owner_id()
+                if owner_id:
+                    await _bot_client.send_message(
+                        owner_id,
+                        notification,
+                        silent=not is_urgent
+                    )
+                    logger.info(f"Private message notification sent via bot (urgent={is_urgent})")
+                else:
+                    # Fallback to user client if owner_id not available
+                    await client.send_message(
+                        config.personal_tg_login,
+                        notification,
+                        silent=not is_urgent
+                    )
+                    logger.info(f"Private message notification sent via user client (urgent={is_urgent})")
+            else:
+                # No bot client, use user client
+                await client.send_message(
+                    config.personal_tg_login,
+                    notification,
+                    silent=not is_urgent
+                )
+                logger.info(f"Private message notification sent via user client (urgent={is_urgent})")
 
             # Call webhook if configured
             if config.asap_webhook_url:
