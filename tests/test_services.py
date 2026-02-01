@@ -1739,8 +1739,8 @@ class TestProductivityServiceCollectMessages:
         now = datetime.now(tz)
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Simulate dialog check
-        last_msg_date = now - timedelta(hours=2)  # 2 hours ago = today
+        # Simulate dialog check - use 1 hour after day start to ensure it's today
+        last_msg_date = day_start + timedelta(hours=1)
 
         should_skip = last_msg_date < day_start
         assert should_skip is False
