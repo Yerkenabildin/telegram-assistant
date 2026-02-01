@@ -165,8 +165,8 @@ class CalDAVService:
             # No selection = use all calendars
             return self._all_calendars
 
-        # Filter by selected names
-        return [c for c in self._all_calendars if c.name in selected]
+        # Filter by selected names (strip whitespace for consistent matching)
+        return [c for c in self._all_calendars if c.name.strip() in selected]
 
     async def get_current_event(self) -> Optional[CalendarEvent]:
         """Get currently active calendar event from any active calendar.

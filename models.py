@@ -470,14 +470,16 @@ class Settings(Model):
     @staticmethod
     def add_caldav_calendar(name: str) -> None:
         """Add a calendar to active list."""
+        name = name.strip()
         calendars = Settings.get_caldav_calendars()
-        if name not in calendars:
+        if name and name not in calendars:
             calendars.append(name)
             Settings.set_caldav_calendars(calendars)
 
     @staticmethod
     def remove_caldav_calendar(name: str) -> None:
         """Remove a calendar from active list."""
+        name = name.strip()
         calendars = Settings.get_caldav_calendars()
         if name in calendars:
             calendars.remove(name)

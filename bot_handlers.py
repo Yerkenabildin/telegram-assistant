@@ -1700,9 +1700,11 @@ def register_bot_handlers(bot, user_client=None):
 
         buttons = []
         for cal in calendars:
-            is_selected = cal.name in selected
+            # Strip whitespace for consistent comparison
+            cal_name = cal.name.strip()
+            is_selected = cal_name in selected
             icon = "✅" if is_selected else "⬜"
-            callback_data = f"cal_toggle:{cal.name}".encode()
+            callback_data = f"cal_toggle:{cal_name}".encode()
             buttons.append([Button.inline(f"{icon} {cal.name}", callback_data)])
 
         buttons.append([Button.inline("🔄 Сбросить выбор", b"caldav_calendars_reset")])
@@ -1717,15 +1719,15 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        calendar_name = event.pattern_match.group(1).decode()
+        calendar_name = event.pattern_match.group(1).decode().strip()
         selected = Settings.get_caldav_calendars()
 
         if calendar_name in selected:
             Settings.remove_caldav_calendar(calendar_name)
-            await event.answer(f"❌ {calendar_name} отключен")
+            await event.answer(f"❌ Отключен")
         else:
             Settings.add_caldav_calendar(calendar_name)
-            await event.answer(f"✅ {calendar_name} включен")
+            await event.answer(f"✅ Включен")
 
         # Refresh the calendar list
         await caldav_calendars_menu(event)
