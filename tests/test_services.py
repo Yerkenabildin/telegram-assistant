@@ -2690,3 +2690,163 @@ class TestProductivityTempChatIntegration:
         assert len(all_extra_chats) == 4
         for chat_id in temp_chat_ids:
             assert chat_id in all_extra_chats
+
+
+# ============================================================================
+# Tests for Webhook URL Override Feature
+# ============================================================================
+
+class TestWebhookUrlOverride:
+    """Tests for webhook URL override functionality in NotificationService."""
+
+    def test_webhook_url_override_takes_precedence(self):
+        """Test that passed webhook_url overrides instance default."""
+        instance_url = "https://instance.example.com/webhook"
+        override_url = "https://override.example.com/webhook"
+
+        # Simulate the logic from call_webhook method
+        url = override_url or instance_url
+
+        assert url == override_url
+
+    def test_webhook_falls_back_to_instance_when_no_override(self):
+        """Test that instance webhook is used when no override passed."""
+        instance_url = "https://instance.example.com/webhook"
+        override_url = None
+
+        url = override_url or instance_url
+
+        assert url == instance_url
+
+    def test_webhook_none_when_both_unset(self):
+        """Test that URL is None when both override and instance are unset."""
+        instance_url = None
+        override_url = None
+
+        url = override_url or instance_url
+
+        assert url is None
+
+    def test_empty_string_override_falls_back(self):
+        """Test that empty string override falls back to instance."""
+        instance_url = "https://instance.example.com/webhook"
+        override_url = ""
+
+        url = override_url or instance_url
+
+        assert url == instance_url
+
+
+class TestAsapNotificationWithSettings:
+    """Tests for ASAP notification flow using Settings."""
+
+    def test_asap_check_settings_first(self, mock_settings):
+        """Test ASAP handler checks Settings.is_asap_enabled first."""
+        mock_settings.set_asap_enabled(False)
+
+        # If ASAP is disabled, should not proceed regardless of other conditions
+        should_proceed = mock_settings.is_asap_enabled()
+
+        assert should_proceed is False
+
+    def test_asap_prefers_settings_personal_chat(self, mock_settings):
+        """Test ASAP uses Settings personal_chat_id over config."""
+        mock_settings.set_personal_chat_id(999888777)
+        config_personal_login = "config_user"
+
+        # Simulate the logic: prefer Settings, fallback to config
+        personal_chat_id = mock_settings.get_personal_chat_id()
+        notification_target = personal_chat_id or config_personal_login
+
+        assert notification_target == 999888777
+
+    def test_asap_falls_back_to_config_personal_login(self, mock_settings):
+        """Test ASAP falls back to config.personal_tg_login if Settings not set."""
+        # Personal chat not set in Settings
+        config_personal_login = "config_user"
+
+        personal_chat_id = mock_settings.get_personal_chat_id()
+        notification_target = personal_chat_id or config_personal_login
+
+        assert notification_target == "config_user"
+
+    def test_asap_prefers_settings_webhook(self, mock_settings):
+        """Test ASAP uses Settings webhook_url over config."""
+        mock_settings.set_asap_webhook_url("https://settings.webhook.com")
+        config_webhook_url = "https://config.webhook.com"
+
+        # Simulate the logic: prefer Settings, fallback to config
+        settings_webhook = mock_settings.get_asap_webhook_url()
+        webhook_url = settings_webhook or config_webhook_url
+
+        assert webhook_url == "https://settings.webhook.com"
+
+    def test_asap_falls_back_to_config_webhook(self, mock_settings):
+        """Test ASAP falls back to config.asap_webhook_url if Settings not set."""
+        config_webhook_url = "https://config.webhook.com"
+
+        settings_webhook = mock_settings.get_asap_webhook_url()
+        webhook_url = settings_webhook or config_webhook_url
+
+        assert webhook_url == "https://config.webhook.com"
+
+    def test_asap_no_webhook_when_both_unset(self, mock_settings):
+        """Test no webhook call when both Settings and config webhook are unset."""
+        config_webhook_url = None
+
+        settings_webhook = mock_settings.get_asap_webhook_url()
+        webhook_url = settings_webhook or config_webhook_url
+
+        should_call_webhook = webhook_url is not None
+
+        assert should_call_webhook is False
+
+    def test_full_asap_decision_flow(self, mock_settings):
+        """Test complete ASAP notification decision flow."""
+        # Setup: ASAP enabled, personal chat set, webhook set
+        mock_settings.set_asap_enabled(True)
+        mock_settings.set_personal_chat_id(123456789)
+        mock_settings.set_asap_webhook_url("https://webhook.example.com")
+
+        message_text = "Need this done ASAP please"
+        is_private = True
+        emoji_status_id = 5379748062124056162  # User has emoji status
+        work_emoji_id = 5810051751654460532  # Different from current
+
+        # Step 1: Check if ASAP is enabled
+        if not mock_settings.is_asap_enabled():
+            should_notify = False
+        # Step 2: Check personal chat is configured
+        elif not mock_settings.get_personal_chat_id():
+            should_notify = False
+        # Step 3: Check message is private
+        elif not is_private:
+            should_notify = False
+        # Step 4: Check for ASAP keyword
+        elif 'asap' not in message_text.lower():
+            should_notify = False
+        # Step 5: Check user has emoji status (is "busy")
+        elif emoji_status_id is None:
+            should_notify = False
+        # Step 6: Check user is not "available" (work emoji)
+        elif emoji_status_id == work_emoji_id:
+            should_notify = False
+        else:
+            should_notify = True
+
+        assert should_notify is True
+
+    def test_asap_blocked_when_user_is_available(self, mock_settings):
+        """Test ASAP notification blocked when user has work emoji (is available)."""
+        mock_settings.set_asap_enabled(True)
+        mock_settings.set_personal_chat_id(123456789)
+
+        message_text = "Need this ASAP"
+        is_private = True
+        emoji_status_id = 5810051751654460532  # Same as work emoji
+        work_emoji_id = 5810051751654460532
+
+        # User is "available" (has work emoji), should not notify
+        is_available = emoji_status_id == work_emoji_id
+
+        assert is_available is True

@@ -146,6 +146,52 @@ class MockSettings:
         else:
             MockSettings._db['settings_chat_id'] = str(chat_id)
 
+    # =========================================================================
+    # Personal Chat Settings (for ASAP notifications)
+    # =========================================================================
+
+    @staticmethod
+    def get_personal_chat_id():
+        """Get personal chat ID as integer."""
+        value = MockSettings._db.get('personal_chat_id')
+        return int(value) if value else None
+
+    @staticmethod
+    def set_personal_chat_id(chat_id):
+        """Set or clear personal chat ID."""
+        if chat_id is None:
+            MockSettings._db.pop('personal_chat_id', None)
+        else:
+            MockSettings._db['personal_chat_id'] = str(chat_id)
+
+    # =========================================================================
+    # ASAP Notification Settings
+    # =========================================================================
+
+    @staticmethod
+    def is_asap_enabled():
+        """Check if ASAP notifications are enabled (default: True)."""
+        value = MockSettings._db.get('asap_enabled')
+        return value != 'false'  # Default is True
+
+    @staticmethod
+    def set_asap_enabled(enabled):
+        """Enable or disable ASAP notifications."""
+        MockSettings._db['asap_enabled'] = 'true' if enabled else 'false'
+
+    @staticmethod
+    def get_asap_webhook_url():
+        """Get webhook URL for ASAP notifications."""
+        return MockSettings._db.get('asap_webhook_url')
+
+    @staticmethod
+    def set_asap_webhook_url(url):
+        """Set or clear webhook URL for ASAP notifications."""
+        if url is None:
+            MockSettings._db.pop('asap_webhook_url', None)
+        else:
+            MockSettings._db['asap_webhook_url'] = url
+
     @staticmethod
     def clear():
         """Clear all settings."""

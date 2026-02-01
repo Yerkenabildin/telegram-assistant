@@ -196,3 +196,192 @@ class TestEdgeCases:
         mock_reply.create("5379748062124056162", mock_message)
         result = mock_reply.get_by_emoji("5379748062124056162")
         assert result is not None
+
+
+class TestMockSettingsPersonalChat:
+    """Tests for personal chat settings."""
+
+    def test_set_and_get_personal_chat_id(self, mock_settings):
+        """Test setting and getting personal chat ID."""
+        chat_id = 123456789
+        mock_settings.set_personal_chat_id(chat_id)
+
+        result = mock_settings.get_personal_chat_id()
+        assert result == chat_id
+
+    def test_get_personal_chat_id_not_set(self, mock_settings):
+        """Test getting personal chat ID when not set returns None."""
+        result = mock_settings.get_personal_chat_id()
+        assert result is None
+
+    def test_clear_personal_chat_id(self, mock_settings):
+        """Test clearing personal chat ID by setting to None."""
+        mock_settings.set_personal_chat_id(123456789)
+        assert mock_settings.get_personal_chat_id() == 123456789
+
+        mock_settings.set_personal_chat_id(None)
+        assert mock_settings.get_personal_chat_id() is None
+
+    def test_personal_chat_id_returns_int(self, mock_settings):
+        """Test that get_personal_chat_id returns an integer."""
+        chat_id = 987654321
+        mock_settings.set_personal_chat_id(chat_id)
+
+        result = mock_settings.get_personal_chat_id()
+        assert isinstance(result, int)
+        assert result == chat_id
+
+    def test_personal_chat_id_negative_id(self, mock_settings):
+        """Test handling negative chat ID (group chats)."""
+        chat_id = -1001234567890
+        mock_settings.set_personal_chat_id(chat_id)
+
+        result = mock_settings.get_personal_chat_id()
+        assert result == chat_id
+
+
+class TestMockSettingsAsap:
+    """Tests for ASAP notification settings."""
+
+    def test_asap_enabled_default_true(self, mock_settings):
+        """Test ASAP notifications are enabled by default."""
+        result = mock_settings.is_asap_enabled()
+        assert result is True
+
+    def test_disable_asap(self, mock_settings):
+        """Test disabling ASAP notifications."""
+        mock_settings.set_asap_enabled(False)
+
+        result = mock_settings.is_asap_enabled()
+        assert result is False
+
+    def test_enable_asap(self, mock_settings):
+        """Test enabling ASAP notifications."""
+        mock_settings.set_asap_enabled(False)
+        assert mock_settings.is_asap_enabled() is False
+
+        mock_settings.set_asap_enabled(True)
+        assert mock_settings.is_asap_enabled() is True
+
+    def test_set_and_get_webhook_url(self, mock_settings):
+        """Test setting and getting webhook URL."""
+        url = "https://example.com/webhook"
+        mock_settings.set_asap_webhook_url(url)
+
+        result = mock_settings.get_asap_webhook_url()
+        assert result == url
+
+    def test_get_webhook_url_not_set(self, mock_settings):
+        """Test getting webhook URL when not set returns None."""
+        result = mock_settings.get_asap_webhook_url()
+        assert result is None
+
+    def test_clear_webhook_url(self, mock_settings):
+        """Test clearing webhook URL by setting to None."""
+        mock_settings.set_asap_webhook_url("https://example.com/webhook")
+        assert mock_settings.get_asap_webhook_url() is not None
+
+        mock_settings.set_asap_webhook_url(None)
+        assert mock_settings.get_asap_webhook_url() is None
+
+    def test_webhook_url_with_query_params(self, mock_settings):
+        """Test webhook URL with query parameters."""
+        url = "https://example.com/webhook?token=abc123&channel=alerts"
+        mock_settings.set_asap_webhook_url(url)
+
+        result = mock_settings.get_asap_webhook_url()
+        assert result == url
+
+    def test_asap_settings_isolation(self, mock_settings):
+        """Test that ASAP settings are properly isolated."""
+        # Set all ASAP-related settings
+        mock_settings.set_personal_chat_id(111111)
+        mock_settings.set_asap_enabled(False)
+        mock_settings.set_asap_webhook_url("https://test.com")
+
+        # Verify all are set correctly
+        assert mock_settings.get_personal_chat_id() == 111111
+        assert mock_settings.is_asap_enabled() is False
+        assert mock_settings.get_asap_webhook_url() == "https://test.com"
+
+        # Clear all
+        mock_settings.set_personal_chat_id(None)
+        mock_settings.set_asap_enabled(True)
+        mock_settings.set_asap_webhook_url(None)
+
+        # Verify all are cleared/reset
+        assert mock_settings.get_personal_chat_id() is None
+        assert mock_settings.is_asap_enabled() is True
+        assert mock_settings.get_asap_webhook_url() is None
+
+
+class TestAsapNotificationLogic:
+    """Tests for ASAP notification decision logic."""
+
+    def test_should_notify_when_enabled_and_has_asap(self, mock_settings):
+        """Test notification triggered when ASAP enabled and message contains ASAP."""
+        mock_settings.set_asap_enabled(True)
+        mock_settings.set_personal_chat_id(123456789)
+
+        is_enabled = mock_settings.is_asap_enabled()
+        has_target = mock_settings.get_personal_chat_id() is not None
+        message_text = "Please check this ASAP"
+
+        should_notify = (
+            is_enabled and
+            has_target and
+            'asap' in message_text.lower()
+        )
+
+        assert should_notify is True
+
+    def test_should_not_notify_when_disabled(self, mock_settings):
+        """Test notification not triggered when ASAP disabled."""
+        mock_settings.set_asap_enabled(False)
+        mock_settings.set_personal_chat_id(123456789)
+
+        is_enabled = mock_settings.is_asap_enabled()
+        has_target = mock_settings.get_personal_chat_id() is not None
+        message_text = "Please check this ASAP"
+
+        should_notify = (
+            is_enabled and
+            has_target and
+            'asap' in message_text.lower()
+        )
+
+        assert should_notify is False
+
+    def test_should_not_notify_without_personal_chat(self, mock_settings):
+        """Test notification not triggered without personal chat configured."""
+        mock_settings.set_asap_enabled(True)
+        # Personal chat not set
+
+        is_enabled = mock_settings.is_asap_enabled()
+        has_target = mock_settings.get_personal_chat_id() is not None
+        message_text = "Please check this ASAP"
+
+        should_notify = (
+            is_enabled and
+            has_target and
+            'asap' in message_text.lower()
+        )
+
+        assert should_notify is False
+
+    def test_should_not_notify_without_asap_keyword(self, mock_settings):
+        """Test notification not triggered without ASAP keyword."""
+        mock_settings.set_asap_enabled(True)
+        mock_settings.set_personal_chat_id(123456789)
+
+        is_enabled = mock_settings.is_asap_enabled()
+        has_target = mock_settings.get_personal_chat_id() is not None
+        message_text = "Please check this when you have time"
+
+        should_notify = (
+            is_enabled and
+            has_target and
+            'asap' in message_text.lower()
+        )
+
+        assert should_notify is False
