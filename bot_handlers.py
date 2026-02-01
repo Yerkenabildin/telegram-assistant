@@ -179,6 +179,7 @@ def get_main_menu_keyboard():
         [Button.inline("📅 Расписание статусов", b"schedule")],
         [Button.inline("📝 Автоответы", b"replies")],
         [Button.inline("🔔 Контекст призыва", b"mentions")],
+        [Button.inline("💬 Приватные сообщения", b"private_messages")],
         [Button.inline("📊 Продуктивность", b"productivity")],
         [Button.inline("📆 Календарь", b"calendar")],
         [Button.inline("⚙️ Настройки", b"settings")],
@@ -311,8 +312,11 @@ def get_meeting_keyboard():
 
 def get_settings_keyboard():
     """Settings keyboard."""
+    personal_chat_id = Settings.get_personal_chat_id()
+    personal_text = "👤 Персональный чат ✓" if personal_chat_id else "👤 Персональный чат"
+
     return [
-        [Button.inline("💬 Приватные сообщения", b"private_messages")],
+        [Button.inline(personal_text, b"pm_personal_chat")],
         [Button.inline("🚪 Выйти из аккаунта", b"logout_confirm")],
         [Button.inline("« Назад", b"main")],
     ]
@@ -324,17 +328,13 @@ def get_private_messages_keyboard():
     asap_toggle_text = "🟢 ASAP включен" if is_asap_enabled else "🔴 ASAP выключен"
     asap_toggle_data = b"asap_off" if is_asap_enabled else b"asap_on"
 
-    personal_chat_id = Settings.get_personal_chat_id()
-    personal_text = "👤 Персональный чат ✓" if personal_chat_id else "👤 Персональный чат"
-
     webhook_url = Settings.get_asap_webhook_url()
     webhook_text = "🔗 Webhook ✓" if webhook_url else "🔗 Webhook"
 
     return [
-        [Button.inline(personal_text, b"pm_personal_chat")],
         [Button.inline(asap_toggle_text, asap_toggle_data)],
         [Button.inline(webhook_text, b"pm_webhook")],
-        [Button.inline("« Назад", b"settings")],
+        [Button.inline("« Назад", b"main")],
     ]
 
 
@@ -1900,15 +1900,21 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        settings_chat_id = Settings.get_settings_chat_id()
-
         text = "⚙️ **Настройки**\n\n"
 
-        if settings_chat_id:
-            text += f"Настроечный чат: `{settings_chat_id}`"
+        # Personal chat status
+        personal_chat_id = Settings.get_personal_chat_id()
+        if personal_chat_id:
+            try:
+                entity = await _user_client.get_entity(personal_chat_id)
+                name = getattr(entity, 'first_name', None) or getattr(entity, 'title', str(personal_chat_id))
+                text += f"👤 Персональный чат: **{name}**\n"
+            except Exception:
+                text += f"👤 Персональный чат: `{personal_chat_id}`\n"
         else:
-            text += "Настроечный чат: не настроен\n"
-            text += "Отправьте `/autoreply-settings` в любом чате для настройки."
+            text += "👤 Персональный чат: _не настроен_\n"
+
+        text += "\n_Персональный чат используется для ASAP и других уведомлений._"
 
         await event.edit(text, buttons=get_settings_keyboard())
 
@@ -1990,22 +1996,10 @@ def register_bot_handlers(bot, user_client=None):
             await event.answer("⛔ Доступ запрещён", alert=True)
             return
 
-        personal_chat_id = Settings.get_personal_chat_id()
         webhook_url = Settings.get_asap_webhook_url()
         is_asap_enabled = Settings.is_asap_enabled()
 
         text = "💬 **Приватные сообщения**\n\n"
-
-        # Personal chat status
-        if personal_chat_id:
-            try:
-                entity = await _user_client.get_entity(personal_chat_id)
-                name = getattr(entity, 'first_name', None) or getattr(entity, 'title', str(personal_chat_id))
-                text += f"👤 Персональный чат: **{name}**\n"
-            except Exception:
-                text += f"👤 Персональный чат: `{personal_chat_id}`\n"
-        else:
-            text += "👤 Персональный чат: _не настроен_\n"
 
         # ASAP status
         asap_status = "✅ включены" if is_asap_enabled else "❌ выключены"
@@ -2065,7 +2059,7 @@ def register_bot_handlers(bot, user_client=None):
 
         _pending_personal_chat.discard(event.sender_id)
         await event.answer("❌ Отменено")
-        await private_messages_menu(event)
+        await settings_menu(event)
 
     @bot.on(events.CallbackQuery(data=b"pm_personal_chat_clear"))
     async def pm_personal_chat_clear(event):
@@ -2078,7 +2072,7 @@ def register_bot_handlers(bot, user_client=None):
         Settings.set_personal_chat_id(None)
         logger.info("Personal chat cleared")
         await event.answer("✅ Персональный чат очищен")
-        await private_messages_menu(event)
+        await settings_menu(event)
 
     @bot.on(events.CallbackQuery(data=b"asap_on"))
     async def asap_enable(event):
@@ -2944,7 +2938,7 @@ def register_bot_handlers(bot, user_client=None):
 
             await event.respond(
                 f"✅ Персональный чат установлен!\n\n**{chat_name}**\n\nASAP уведомления будут приходить в этот чат.",
-                buttons=[[Button.inline("« Назад", b"private_messages")]]
+                buttons=[[Button.inline("« Назад", b"settings")]]
             )
             return
 
