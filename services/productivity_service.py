@@ -196,6 +196,15 @@ class ProductivityService:
                 skipped_muted += 1
                 continue
 
+            # Skip bots
+            entity = dialog.entity
+            if hasattr(entity, 'bot') and entity.bot:
+                continue
+
+            # Skip Saved Messages (self-chat)
+            if hasattr(entity, 'id') and entity.id == me.id:
+                continue
+
             dialog_count += 1
 
             # Skip channels where we're not admin (usually no outgoing messages)
