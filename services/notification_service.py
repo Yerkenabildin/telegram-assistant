@@ -107,15 +107,16 @@ class NotificationService:
         if emoji_status_id is None:
             return False
 
-        # Get work emoji from schedule - if not set, ASAP always works
+        # Get work emoji from schedule - if user has work emoji, they are "available"
         work_emoji_id = Schedule.get_work_emoji_id()
-        if work_emoji_id is None:
-            # No work schedule configured - ASAP notifications always work
-            return True
-
-        # User is "available" (has work emoji status)
-        if emoji_status_id == work_emoji_id:
+        if work_emoji_id and emoji_status_id == work_emoji_id:
             logger.debug("User is available (work emoji), not sending ASAP notification")
+            return False
+
+        # Check if user is in a meeting
+        active_meeting = Schedule.get_active_meeting()
+        if active_meeting and emoji_status_id == int(active_meeting.emoji_id):
+            logger.debug("User is in a meeting, not sending ASAP notification")
             return False
 
         return True
