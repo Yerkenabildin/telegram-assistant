@@ -17,7 +17,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings
+from models import Reply, Settings, VipList
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 from services.mention_service import MentionService
@@ -345,6 +345,55 @@ def register_handlers(client, bot=None):
         """Log all outgoing messages for debugging."""
         logger.debug(f"Outgoing: '{event.message.text}' in chat {event.chat_id}")
 
+    async def _send_asap_notification(
+        event,
+        sender,
+        sender_username: Optional[str],
+        sender_id: int,
+        is_vip: bool = False
+    ) -> None:
+        """
+        Send ASAP notification to personal chat and webhook.
+
+        Args:
+            event: The message event
+            sender: Sender entity
+            sender_username: Sender's username
+            sender_id: Sender's numeric ID
+            is_vip: Whether this is a VIP-triggered notification
+        """
+        personal_chat_id = Settings.get_personal_chat_id()
+        notification_target = personal_chat_id or config.personal_tg_login
+
+        if is_vip:
+            notification_message = f'❗️Срочное сообщение от VIP @{sender_username}'
+        else:
+            notification_message = _notification_service.format_asap_message(sender_username, sender_id)
+
+        await client.send_message(
+            notification_target,
+            notification_message,
+            formatting_entities=[MessageEntityCustomEmoji(offset=0, length=2, document_id=5379748062124056162)]
+        )
+
+        log_type = "VIP" if is_vip else "ASAP"
+        logger.info(f"{log_type} notification sent for message from {sender_username or sender_id}")
+
+        # Record notification time for cooldown
+        _notification_service.record_asap_notification(sender_id)
+
+        # Call webhook if configured (prefer Settings, fallback to config)
+        webhook_url = Settings.get_asap_webhook_url() or config.asap_webhook_url
+        if webhook_url:
+            await _notification_service.call_webhook(
+                sender_username=sender_username,
+                sender_id=sender_id,
+                message_text=event.message.text or '',
+                webhook_url=webhook_url
+            )
+
+        await _send_reaction(client, event, '\U0001fae1')  # 🫡
+
     @client.on(events.NewMessage(incoming=True, pattern=".*[Aa][Ss][Aa][Pp].*"))
     async def asap_handler(event):
         """Handle incoming messages with ASAP keyword."""
@@ -365,6 +414,13 @@ def register_handlers(client, bot=None):
         if getattr(sender, 'bot', False):
             return
 
+        sender_id = getattr(sender, 'id', 0)
+
+        # Check cooldown
+        if not _notification_service.check_asap_cooldown(sender_id):
+            logger.debug(f"ASAP notification skipped due to cooldown for sender {sender_id}")
+            return
+
         me = await client.get_me()
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
 
@@ -376,30 +432,69 @@ def register_handlers(client, bot=None):
             return
 
         sender_username = getattr(sender, 'username', None)
+
+        await _send_asap_notification(event, sender, sender_username, sender_id, is_vip=False)
+
+    @client.on(events.NewMessage(incoming=True))
+    async def vip_private_message_handler(event):
+        """Handle private messages from VIP users as ASAP."""
+        if not event.is_private:
+            return
+
+        # Check if VIP-as-ASAP is enabled
+        if not Settings.is_vip_as_asap_enabled():
+            return
+
+        # Check if ASAP notifications are enabled
+        if not Settings.is_asap_enabled():
+            return
+
+        # Check if personal chat is configured
+        personal_chat_id = Settings.get_personal_chat_id()
+        if not personal_chat_id and not config.personal_tg_login:
+            return
+
+        sender = await event.get_sender()
+        if getattr(sender, 'bot', False):
+            return
+
+        sender_username = getattr(sender, 'username', None)
         sender_id = getattr(sender, 'id', 0)
 
-        # Send notification to personal account
-        # Prefer Settings personal_chat_id, fallback to config.personal_tg_login
-        notification_target = personal_chat_id or config.personal_tg_login
-        notification_message = _notification_service.format_asap_message(sender_username, sender_id)
-        await client.send_message(
-            notification_target,
-            notification_message,
-            formatting_entities=[MessageEntityCustomEmoji(offset=0, length=2, document_id=5379748062124056162)]
-        )
-        logger.info(f"ASAP notification sent for message from {sender_username or sender_id}")
+        # Check if sender is VIP
+        if not sender_username:
+            return
 
-        # Call webhook if configured (prefer Settings, fallback to config)
-        webhook_url = Settings.get_asap_webhook_url() or config.asap_webhook_url
-        if webhook_url:
-            await _notification_service.call_webhook(
-                sender_username=sender_username,
-                sender_id=sender_id,
-                message_text=event.message.text or '',
-                webhook_url=webhook_url
-            )
+        vip_users = VipList.get_users()
+        is_vip_from_db = sender_username.lower() in vip_users
+        is_vip_from_config = config.vip_usernames and sender_username.lower() in config.vip_usernames
 
-        await _send_reaction(client, event, '\U0001fae1')  # 🫡
+        if not (is_vip_from_db or is_vip_from_config):
+            return
+
+        # Skip if message already contains ASAP (will be handled by asap_handler)
+        message_text = event.message.text or ''
+        if 'asap' in message_text.lower():
+            return
+
+        # Check cooldown
+        if not _notification_service.check_asap_cooldown(sender_id):
+            logger.debug(f"VIP notification skipped due to cooldown for sender {sender_id}")
+            return
+
+        me = await client.get_me()
+        emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
+
+        # Use the same availability check as ASAP
+        if not _notification_service.should_notify_asap(
+            message_text='asap',  # Fake ASAP to pass keyword check
+            is_private=True,
+            emoji_status_id=emoji_status_id
+        ):
+            return
+
+        logger.info(f"VIP private message from @{sender_username}, treating as ASAP")
+        await _send_asap_notification(event, sender, sender_username, sender_id, is_vip=True)
 
     @client.on(events.NewMessage(incoming=True))
     async def reply_to_my_message_handler(event):

@@ -672,6 +672,33 @@ class Settings(Model):
         else:
             Settings.set('asap_webhook_url', url)
 
+    @staticmethod
+    def get_asap_cooldown_minutes() -> int:
+        """Get ASAP notification cooldown in minutes (default: 15)."""
+        value = Settings.get('asap_cooldown_minutes')
+        if value:
+            try:
+                return int(value)
+            except ValueError:
+                pass
+        return 15
+
+    @staticmethod
+    def set_asap_cooldown_minutes(minutes: int) -> None:
+        """Set ASAP notification cooldown in minutes."""
+        Settings.set('asap_cooldown_minutes', str(minutes))
+
+    @staticmethod
+    def is_vip_as_asap_enabled() -> bool:
+        """Check if VIP private messages should trigger ASAP notifications (default: False)."""
+        value = Settings.get('vip_as_asap_enabled')
+        return value == 'true'
+
+    @staticmethod
+    def set_vip_as_asap_enabled(enabled: bool) -> None:
+        """Enable or disable treating VIP private messages as ASAP."""
+        Settings.set('vip_as_asap_enabled', 'true' if enabled else 'false')
+
 
 class Schedule(Model):
     """Model for storing emoji schedule rules"""
