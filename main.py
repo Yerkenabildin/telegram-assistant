@@ -505,9 +505,28 @@ async def _wait_for_auth():
 
 
 async def _init_personal_account():
-    """Initialize personal account ID from PERSONAL_TG_LOGIN config."""
+    """Initialize personal account ID from Settings or PERSONAL_TG_LOGIN config.
+
+    Priority:
+    1. Settings.get_personal_chat_id() (configured via bot)
+    2. config.personal_tg_login (from env variable)
+    """
+    # First check Settings (configured via bot)
+    personal_chat_id = Settings.get_personal_chat_id()
+    if personal_chat_id:
+        set_personal_id(personal_chat_id)
+        try:
+            entity = await client.get_entity(personal_chat_id)
+            if hasattr(entity, 'username') and entity.username:
+                set_personal_username(entity.username)
+            logger.info(f"Personal account set from Settings: {personal_chat_id} (@{getattr(entity, 'username', 'N/A')})")
+        except Exception as e:
+            logger.info(f"Personal account set from Settings: {personal_chat_id} (username not resolved: {e})")
+        return
+
+    # Fallback to env variable
     if not config.personal_tg_login:
-        logger.debug("PERSONAL_TG_LOGIN not configured, skipping personal account init")
+        logger.debug("Personal account not configured (neither Settings nor PERSONAL_TG_LOGIN)")
         return
 
     try:
@@ -516,7 +535,7 @@ async def _init_personal_account():
         set_personal_id(entity.id)
         if hasattr(entity, 'username') and entity.username:
             set_personal_username(entity.username)
-        logger.info(f"Personal account resolved: {entity.id} (@{getattr(entity, 'username', 'N/A')})")
+        logger.info(f"Personal account resolved from env: {entity.id} (@{getattr(entity, 'username', 'N/A')})")
     except Exception as e:
         # If we can't resolve, still set the username for fallback matching
         logger.warning(f"Could not resolve personal account entity: {e}")

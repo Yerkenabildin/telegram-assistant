@@ -146,6 +146,14 @@ def get_personal_id() -> int | None:
     return _personal_id
 
 
+def clear_personal_account() -> None:
+    """Clear the personal account (used when settings are cleared)."""
+    global _personal_id, _personal_username
+    _personal_id = None
+    _personal_username = None
+    logger.info("Personal account cleared")
+
+
 async def _is_owner(event) -> bool:
     """Check if user is the owner."""
     # Check by user ID first
@@ -2080,6 +2088,8 @@ def register_bot_handlers(bot, user_client=None):
 
         _pending_personal_chat.discard(event.sender_id)
         Settings.set_personal_chat_id(None)
+        # Also clear personal account access (will fallback to env PERSONAL_TG_LOGIN)
+        clear_personal_account()
         logger.info("Personal chat cleared")
         await event.answer("✅ Персональный чат очищен")
         await settings_menu(event)
@@ -2994,10 +3004,20 @@ def register_bot_handlers(bot, user_client=None):
 
             Settings.set_personal_chat_id(chat_id)
             _pending_personal_chat.discard(event.sender_id)
+
+            # Also grant bot access to this user
+            set_personal_id(chat_id)
+            try:
+                entity = await _user_client.get_entity(chat_id)
+                if hasattr(entity, 'username') and entity.username:
+                    set_personal_username(entity.username)
+            except Exception:
+                pass
+
             logger.info(f"Personal chat set to {chat_id} ({chat_name})")
 
             await event.respond(
-                f"✅ Персональный чат установлен!\n\n**{chat_name}**\n\nASAP уведомления будут приходить в этот чат.",
+                f"✅ Персональный чат установлен!\n\n**{chat_name}**\n\nASAP уведомления будут приходить в этот чат.\n\nЭтому пользователю также доступны настройки бота.",
                 buttons=[[Button.inline("« Назад", b"settings")]]
             )
             return
