@@ -20,7 +20,7 @@ from logging_config import logger
 from models import Reply, Settings, Schedule, VipList
 from routes import register_routes
 from handlers import register_handlers
-from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username, set_bot_username
+from bot_handlers import register_bot_handlers, set_owner_id, set_owner_username, set_bot_username, set_personal_id, set_personal_username
 from services.caldav_service import caldav_service
 from telethon.tl.functions.account import UpdateEmojiStatusRequest
 from telethon.tl.types import EmojiStatus
@@ -434,6 +434,9 @@ async def run_telethon():
             set_owner_username(me.username)
         logger.info(f"Telethon client authorized as {me.id} (@{me.username})")
 
+        # Set personal account ID for bot access (PERSONAL_TG_LOGIN)
+        await _init_personal_account()
+
         # Send welcome message via bot if configured
         await _send_welcome_message()
     else:
@@ -495,8 +498,31 @@ async def _wait_for_auth():
         if await client.is_user_authorized():
             me = await client.get_me()
             logger.info(f"Telethon client now authorized as {me.id} (@{me.username})")
+            # Initialize personal account for bot access
+            await _init_personal_account()
             await _send_welcome_message()
             break
+
+
+async def _init_personal_account():
+    """Initialize personal account ID from PERSONAL_TG_LOGIN config."""
+    if not config.personal_tg_login:
+        logger.debug("PERSONAL_TG_LOGIN not configured, skipping personal account init")
+        return
+
+    try:
+        # Try to resolve the personal account entity
+        entity = await client.get_entity(config.personal_tg_login)
+        set_personal_id(entity.id)
+        if hasattr(entity, 'username') and entity.username:
+            set_personal_username(entity.username)
+        logger.info(f"Personal account resolved: {entity.id} (@{getattr(entity, 'username', 'N/A')})")
+    except Exception as e:
+        # If we can't resolve, still set the username for fallback matching
+        logger.warning(f"Could not resolve personal account entity: {e}")
+        # Set username for fallback (if it looks like a username)
+        if not config.personal_tg_login.isdigit():
+            set_personal_username(config.personal_tg_login)
 
 
 async def _send_welcome_message():
