@@ -224,8 +224,22 @@ def get_auth_cancel_keyboard():
     ]
 
 
-def get_main_menu_keyboard():
-    """Main menu keyboard."""
+def get_main_menu_keyboard(is_personal: bool = False):
+    """Main menu keyboard.
+
+    Args:
+        is_personal: If True, show limited menu for personal account
+                    (features requiring user client are hidden)
+    """
+    if is_personal:
+        # Limited menu for personal account - no user client features
+        return [
+            [Button.inline("🔔 Контекст призыва", b"mentions")],
+            [Button.inline("💬 Приватные сообщения", b"private_messages")],
+            [Button.inline("⚙️ Настройки", b"settings")],
+        ]
+
+    # Full menu for owner
     buttons = [
         [Button.inline("📅 Расписание статусов", b"schedule")],
         [Button.inline("📝 Автоответы", b"replies")],
@@ -361,8 +375,19 @@ def get_meeting_keyboard():
         ]
 
 
-def get_settings_keyboard():
-    """Settings keyboard."""
+def get_settings_keyboard(is_personal: bool = False):
+    """Settings keyboard.
+
+    Args:
+        is_personal: If True, show limited settings for personal account
+    """
+    if is_personal:
+        # Personal account has no settings to configure
+        return [
+            [Button.inline("« Назад", b"main")],
+        ]
+
+    # Full settings for owner
     personal_chat_id = Settings.get_personal_chat_id()
     personal_text = "👤 Персональный чат ✓" if personal_chat_id else "👤 Персональный чат"
 
@@ -648,10 +673,11 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
+        is_personal = await _is_personal(event)
         await event.respond(
             "🤖 **Ваш ассистент**\n\n"
             "Выберите раздел:",
-            buttons=get_main_menu_keyboard()
+            buttons=get_main_menu_keyboard(is_personal=is_personal)
         )
 
     @bot.on(events.CallbackQuery(data=b"main"))
@@ -660,14 +686,16 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
-        # Delete user client messages when returning to main menu
-        await _delete_emoji_list_message()
-        await _delete_schedule_list_message()
+        # Delete user client messages when returning to main menu (only for owner)
+        is_personal = await _is_personal(event)
+        if not is_personal:
+            await _delete_emoji_list_message()
+            await _delete_schedule_list_message()
 
         await event.edit(
             "🤖 **Ваш ассистент**\n\n"
             "Выберите раздел:",
-            buttons=get_main_menu_keyboard()
+            buttons=get_main_menu_keyboard(is_personal=is_personal)
         )
 
     # =========================================================================
@@ -797,6 +825,11 @@ def register_bot_handlers(bot, user_client=None):
     async def replies_menu(event):
         """Show replies menu."""
         if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to replies (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         # Clear add mode when returning to menu
@@ -1025,6 +1058,11 @@ def register_bot_handlers(bot, user_client=None):
     async def schedule_menu(event):
         """Show schedule menu."""
         if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to schedule (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         # Clean up messages from other sections or list view
@@ -1491,6 +1529,11 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
+        # Personal account doesn't have access to calendar (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
+            return
+
         is_configured = Settings.is_caldav_configured()
         is_enabled = Settings.is_calendar_sync_enabled()
         meeting_emoji = Settings.get('meeting_emoji_id')
@@ -1913,6 +1956,14 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
+        is_personal = await _is_personal(event)
+
+        if is_personal:
+            # Simplified settings for personal account
+            text = "⚙️ **Настройки**\n\n_Вы используете бота как персональный аккаунт._"
+            await event.edit(text, buttons=get_settings_keyboard(is_personal=True))
+            return
+
         text = "⚙️ **Настройки**\n\n"
 
         # Personal chat status
@@ -1937,6 +1988,11 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
+        # Personal account cannot logout
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
+            return
+
         await event.edit(
             "⚠️ **Выйти из аккаунта?**\n\n"
             "Сессия Telegram-клиента будет завершена.\n"
@@ -1948,6 +2004,11 @@ def register_bot_handlers(bot, user_client=None):
     async def logout(event):
         """Logout from user client."""
         if not await _has_access(event):
+            return
+
+        # Personal account cannot logout
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         global _owner_id, _owner_username
@@ -2042,6 +2103,11 @@ def register_bot_handlers(bot, user_client=None):
     async def pm_personal_chat_start(event):
         """Start setting personal chat."""
         if not await _has_access(event):
+            return
+
+        # Personal account cannot configure personal chat
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         _pending_personal_chat.add(event.sender_id)
@@ -3555,6 +3621,11 @@ def register_bot_handlers(bot, user_client=None):
     async def productivity_menu(event):
         """Show productivity summary configuration menu."""
         if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to productivity (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         is_enabled = Settings.is_productivity_summary_enabled()
