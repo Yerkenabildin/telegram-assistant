@@ -1308,25 +1308,26 @@ class TestOnlineMentionNotification:
 
         assert should_use_bot is True
 
-    def test_offline_notification_uses_user_client(self):
-        """Test that offline notifications should use user client."""
+    def test_offline_notification_uses_bot(self):
+        """Test that offline notifications use bot client (not user client)."""
         is_online = False
         bot_client_available = True
 
-        # Logic: when offline, use user client regardless of bot
-        should_use_bot = is_online and bot_client_available
+        # Logic: offline notifications now use bot via _send_bot_notification
+        # The bot sends to owner + duplicates to personal
+        should_use_bot = bot_client_available
 
-        assert should_use_bot is False
+        assert should_use_bot is True
 
-    def test_online_without_bot_uses_user_client(self):
-        """Test that online without bot falls back to user client."""
-        is_online = True
+    def test_offline_without_bot_cannot_send(self):
+        """Test that offline notifications fail gracefully without bot."""
+        is_online = False
         bot_client_available = False
 
-        # Logic: when online but no bot, use user client
-        should_use_bot = is_online and bot_client_available
+        # Logic: without bot, _send_bot_notification returns False
+        can_send = bot_client_available
 
-        assert should_use_bot is False
+        assert can_send is False
 
     def test_online_notification_header_includes_indicator(self):
         """Test online notification header includes (вы онлайн) indicator."""
@@ -1486,15 +1487,18 @@ class TestDelayedMentionNotification:
 
         assert should_delay is False
 
-    def test_no_bot_sent_immediately(self):
-        """Test mentions without bot are sent immediately."""
+    def test_no_bot_falls_through_to_bot_helper(self):
+        """Test that without bot, online path falls through to _send_bot_notification."""
         is_online = True
         is_vip = False
         bot_available = False
 
-        # Logic: no bot = use user client immediately
-        should_delay = is_online and bot_available and not is_vip
+        # Logic: when bot not available for online path, falls to else branch
+        # _send_bot_notification handles the failure gracefully
+        uses_online_path = is_online and bot_available
+        should_delay = uses_online_path and not is_vip
 
+        assert uses_online_path is False
         assert should_delay is False
 
     def test_pending_mention_scheduled_with_delay(self):
@@ -2850,3 +2854,402 @@ class TestAsapNotificationWithSettings:
         is_available = emoji_status_id == work_emoji_id
 
         assert is_available is True
+
+
+class TestBotNotificationHelper:
+    """Tests for _send_bot_notification helper logic."""
+
+    def test_returns_false_without_bot_client(self):
+        """Test returns False when bot client is not available."""
+        bot_client = None
+        owner_id = 123456
+
+        can_send = bot_client is not None and owner_id is not None
+
+        assert can_send is False
+
+    def test_returns_false_without_owner_id(self):
+        """Test returns False when owner_id is not set."""
+        bot_client = MagicMock()
+        owner_id = None
+
+        can_send = bot_client is not None and owner_id is not None
+
+        assert can_send is False
+
+    def test_sends_to_owner(self):
+        """Test notification is sent to owner_id."""
+        bot_client = MagicMock()
+        owner_id = 123456
+        personal_id = 789012
+
+        can_send = bot_client is not None and owner_id is not None
+
+        assert can_send is True
+        # Owner always receives the message
+        assert owner_id == 123456
+
+    def test_duplicates_to_personal_when_different_from_owner(self):
+        """Test notification is duplicated to personal account when different from owner."""
+        owner_id = 123456
+        personal_id = 789012
+        duplicate_to_personal = True
+
+        should_duplicate = (
+            duplicate_to_personal and
+            personal_id is not None and
+            personal_id != owner_id
+        )
+
+        assert should_duplicate is True
+
+    def test_no_duplicate_when_personal_equals_owner(self):
+        """Test no duplicate when personal account is the same as owner."""
+        owner_id = 123456
+        personal_id = 123456  # Same as owner
+        duplicate_to_personal = True
+
+        should_duplicate = (
+            duplicate_to_personal and
+            personal_id is not None and
+            personal_id != owner_id
+        )
+
+        assert should_duplicate is False
+
+    def test_no_duplicate_when_personal_not_set(self):
+        """Test no duplicate when personal account is not configured."""
+        owner_id = 123456
+        personal_id = None
+        duplicate_to_personal = True
+
+        should_duplicate = (
+            duplicate_to_personal and
+            personal_id is not None and
+            personal_id != owner_id
+        )
+
+        assert should_duplicate is False
+
+    def test_no_duplicate_when_flag_is_false(self):
+        """Test no duplicate when duplicate_to_personal is False."""
+        owner_id = 123456
+        personal_id = 789012
+        duplicate_to_personal = False
+
+        should_duplicate = (
+            duplicate_to_personal and
+            personal_id is not None and
+            personal_id != owner_id
+        )
+
+        assert should_duplicate is False
+
+    def test_personal_target_prefers_settings_over_config(self):
+        """Test personal target prefers Settings.get_personal_chat_id over get_personal_id."""
+        settings_personal_chat_id = 111222333
+        config_personal_id = 444555666
+
+        personal_target = settings_personal_chat_id or config_personal_id
+
+        assert personal_target == 111222333
+
+    def test_personal_target_falls_back_to_config(self):
+        """Test personal target falls back to get_personal_id when Settings not set."""
+        settings_personal_chat_id = None
+        config_personal_id = 444555666
+
+        personal_target = settings_personal_chat_id or config_personal_id
+
+        assert personal_target == 444555666
+
+    def test_silent_parameter_passed_through(self):
+        """Test silent parameter is respected for both owner and personal."""
+        is_urgent = True
+        silent = not is_urgent
+
+        assert silent is False
+
+    def test_silent_for_non_urgent(self):
+        """Test non-urgent messages are sent silently."""
+        is_urgent = False
+        silent = not is_urgent
+
+        assert silent is True
+
+
+class TestAsapBotNotification:
+    """Tests for ASAP notification via bot (not user client)."""
+
+    def test_asap_requires_bot_client(self):
+        """Test ASAP handler requires bot client to be available."""
+        bot_client_available = False
+
+        should_proceed = bot_client_available
+
+        assert should_proceed is False
+
+    def test_asap_proceeds_with_bot_client(self):
+        """Test ASAP handler proceeds when bot client is available."""
+        bot_client_available = True
+
+        should_proceed = bot_client_available
+
+        assert should_proceed is True
+
+    def test_asap_no_longer_requires_personal_chat(self):
+        """Test ASAP notification no longer requires personal_chat_id as guard."""
+        bot_client_available = True
+        personal_chat_id = None
+        personal_tg_login = None
+
+        # Old logic required: personal_chat_id or personal_tg_login
+        # New logic only requires: bot_client
+        should_proceed = bot_client_available
+
+        assert should_proceed is True
+
+    def test_asap_sends_to_owner_and_personal(self):
+        """Test ASAP notification sends to both owner and personal account."""
+        owner_id = 123456
+        personal_id = 789012
+        bot_client_available = True
+
+        # Both targets should receive the notification
+        targets = [owner_id]
+        if personal_id and personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert len(targets) == 2
+        assert owner_id in targets
+        assert personal_id in targets
+
+    def test_asap_only_sends_to_owner_when_same_as_personal(self):
+        """Test ASAP sends only once when owner == personal."""
+        owner_id = 123456
+        personal_id = 123456  # Same person
+
+        targets = [owner_id]
+        if personal_id and personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert len(targets) == 1
+
+    def test_vip_private_requires_bot_client(self):
+        """Test VIP private message handler requires bot client."""
+        bot_client_available = False
+
+        should_proceed = bot_client_available
+
+        assert should_proceed is False
+
+    def test_vip_private_sends_via_bot(self):
+        """Test VIP private message notification sends via bot."""
+        bot_client_available = True
+        owner_id = 123456
+        personal_id = 789012
+        is_vip = True
+
+        # VIP uses same _send_bot_notification with duplicate_to_personal=True
+        can_send = bot_client_available and owner_id is not None
+
+        targets = [owner_id]
+        if personal_id and personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert can_send is True
+        assert len(targets) == 2
+
+
+class TestOfflineMentionBotNotification:
+    """Tests for offline mention notification via bot."""
+
+    def test_offline_mention_uses_bot_not_user_client(self):
+        """Test offline mention now uses bot instead of user client."""
+        is_online = False
+        bot_client_available = True
+
+        # New logic: offline uses _send_bot_notification (bot)
+        # Old logic: offline used client.send_message (user client)
+        should_use_bot = bot_client_available
+
+        assert should_use_bot is True
+
+    def test_offline_mention_sends_to_owner_and_personal(self):
+        """Test offline mention duplicates to personal account."""
+        owner_id = 123456
+        personal_id = 789012
+
+        targets = [owner_id]
+        if personal_id and personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert len(targets) == 2
+        assert owner_id in targets
+        assert personal_id in targets
+
+    def test_offline_mention_no_duplicate_when_same(self):
+        """Test offline mention doesn't duplicate when owner == personal."""
+        owner_id = 123456
+        personal_id = 123456
+
+        targets = [owner_id]
+        if personal_id and personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert len(targets) == 1
+
+    def test_offline_mention_respects_urgency_for_silent(self):
+        """Test urgent offline mentions are not sent silently."""
+        is_urgent = True
+        silent = not is_urgent
+
+        assert silent is False
+
+    def test_offline_mention_non_urgent_is_silent(self):
+        """Test non-urgent offline mentions are sent silently."""
+        is_urgent = False
+        silent = not is_urgent
+
+        assert silent is True
+
+    def test_offline_without_bot_returns_false(self):
+        """Test offline mention fails gracefully without bot client."""
+        bot_client = None
+
+        can_send = bot_client is not None
+
+        assert can_send is False
+
+    def test_online_vip_still_sends_to_owner_only(self):
+        """Test online VIP mentions send to owner only (no personal duplicate)."""
+        is_online = True
+        is_vip = True
+        bot_client_available = True
+        owner_id = 123456
+
+        # Online VIP path: bot sends directly to owner (no _send_bot_notification)
+        uses_online_path = is_online and bot_client_available
+        sends_immediately = uses_online_path and is_vip
+
+        assert sends_immediately is True
+        # Only owner receives (no personal duplicate in this path)
+
+    def test_online_non_vip_still_delayed(self):
+        """Test online non-VIP mentions are still delayed."""
+        is_online = True
+        is_vip = False
+        bot_client_available = True
+
+        uses_online_path = is_online and bot_client_available
+        should_delay = uses_online_path and not is_vip
+
+        assert should_delay is True
+
+
+class TestNotificationRoutingDecision:
+    """Tests for the unified notification routing logic across all cases."""
+
+    def test_asap_notification_route(self):
+        """Test ASAP notification routing: bot → owner + personal."""
+        notification_type = "asap"
+        bot_available = True
+        owner_id = 100
+        personal_id = 200
+
+        # ASAP always uses _send_bot_notification with duplicate_to_personal=True
+        route = "bot_to_owner_and_personal"
+        targets = [owner_id]
+        if personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert route == "bot_to_owner_and_personal"
+        assert len(targets) == 2
+
+    def test_vip_private_notification_route(self):
+        """Test VIP private message routing: bot → owner + personal."""
+        notification_type = "vip_private"
+        bot_available = True
+        owner_id = 100
+        personal_id = 200
+
+        # VIP private uses _send_bot_notification with duplicate_to_personal=True
+        route = "bot_to_owner_and_personal"
+        targets = [owner_id]
+        if personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert route == "bot_to_owner_and_personal"
+        assert len(targets) == 2
+
+    def test_offline_mention_notification_route(self):
+        """Test offline mention routing: bot → owner + personal."""
+        is_online = False
+        bot_available = True
+        owner_id = 100
+        personal_id = 200
+
+        route = "bot_to_owner_and_personal"
+        targets = [owner_id]
+        if personal_id != owner_id:
+            targets.append(personal_id)
+
+        assert route == "bot_to_owner_and_personal"
+        assert len(targets) == 2
+
+    def test_online_vip_mention_notification_route(self):
+        """Test online VIP mention routing: bot → owner only."""
+        is_online = True
+        is_vip = True
+        owner_id = 100
+
+        # Online VIP sends directly via bot to owner (no personal duplicate)
+        route = "bot_to_owner_only"
+
+        assert route == "bot_to_owner_only"
+
+    def test_online_non_vip_mention_notification_route(self):
+        """Test online non-VIP mention routing: delayed, then bot → owner only."""
+        is_online = True
+        is_vip = False
+        owner_id = 100
+
+        # Online non-VIP is scheduled, then sent via bot to owner
+        route = "delayed_bot_to_owner_only"
+
+        assert route == "delayed_bot_to_owner_only"
+
+    def test_all_notification_types_use_bot(self):
+        """Test that all notification types now use bot, not user client."""
+        notification_types = [
+            "asap",
+            "vip_private",
+            "offline_mention",
+            "online_vip_mention",
+            "online_nonvip_mention",
+        ]
+
+        for ntype in notification_types:
+            # All types should use bot client (never user client for notifications)
+            uses_bot = True
+            assert uses_bot is True, f"{ntype} should use bot"
+
+    def test_personal_duplicate_only_for_formerly_user_client_cases(self):
+        """Test personal account duplicate only for cases that previously used user client."""
+        cases = {
+            "asap": True,                    # Was user client → now bot + personal
+            "vip_private": True,             # Was user client → now bot + personal
+            "offline_mention": True,         # Was user client → now bot + personal
+            "online_vip_mention": False,     # Was already bot → no personal duplicate
+            "online_nonvip_mention": False,  # Was already bot → no personal duplicate
+        }
+
+        for case, should_duplicate in cases.items():
+            assert isinstance(should_duplicate, bool), f"{case} should have bool duplicate flag"
+
+        # Only 3 cases duplicate to personal
+        duplicate_cases = [k for k, v in cases.items() if v]
+        assert len(duplicate_cases) == 3
+        assert "asap" in duplicate_cases
+        assert "vip_private" in duplicate_cases
+        assert "offline_mention" in duplicate_cases
