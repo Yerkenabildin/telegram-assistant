@@ -91,6 +91,10 @@ _bot_username: str | None = None  # Bot username for user client to send message
 _emoji_list_message_id: int | None = None  # Message ID of emoji list from user client
 _schedule_list_message_id: int | None = None  # Message ID of schedule list from user client
 
+# Store personal account ID (for notifications recipient who also has bot access)
+_personal_id: int | None = None
+_personal_username: str | None = None
+
 
 def _utf16_len(text: str) -> int:
     """Calculate length in UTF-16 code units (what Telegram uses for offsets)."""
@@ -123,6 +127,33 @@ def get_owner_id() -> int | None:
     return _owner_id
 
 
+def set_personal_id(user_id: int) -> None:
+    """Set the personal account user ID (PERSONAL_TG_LOGIN)."""
+    global _personal_id
+    _personal_id = user_id
+    logger.info(f"Personal account set to user ID: {user_id}")
+
+
+def set_personal_username(username: str) -> None:
+    """Set the personal account username as fallback."""
+    global _personal_username
+    _personal_username = username.lower().lstrip('@')
+    logger.info(f"Personal account username set to: {_personal_username}")
+
+
+def get_personal_id() -> int | None:
+    """Get the personal account user ID."""
+    return _personal_id
+
+
+def clear_personal_account() -> None:
+    """Clear the personal account (used when settings are cleared)."""
+    global _personal_id, _personal_username
+    _personal_id = None
+    _personal_username = None
+    logger.info("Personal account cleared")
+
+
 async def _is_owner(event) -> bool:
     """Check if user is the owner."""
     # Check by user ID first
@@ -136,6 +167,26 @@ async def _is_owner(event) -> bool:
             return sender.username.lower() == _owner_username
 
     return False
+
+
+async def _is_personal(event) -> bool:
+    """Check if user is the personal account (PERSONAL_TG_LOGIN)."""
+    # Check by user ID first
+    if _personal_id is not None and event.sender_id == _personal_id:
+        return True
+
+    # Fallback: check by username
+    if _personal_username:
+        sender = await event.get_sender()
+        if sender and getattr(sender, 'username', None):
+            return sender.username.lower() == _personal_username
+
+    return False
+
+
+async def _has_access(event) -> bool:
+    """Check if user has access to the bot (owner or personal account)."""
+    return await _is_owner(event) or await _is_personal(event)
 
 
 async def _can_authenticate(event) -> bool:
@@ -173,8 +224,22 @@ def get_auth_cancel_keyboard():
     ]
 
 
-def get_main_menu_keyboard():
-    """Main menu keyboard."""
+def get_main_menu_keyboard(is_personal: bool = False):
+    """Main menu keyboard.
+
+    Args:
+        is_personal: If True, show limited menu for personal account
+                    (features requiring user client are hidden)
+    """
+    if is_personal:
+        # Limited menu for personal account - no user client features
+        return [
+            [Button.inline("🔔 Контекст призыва", b"mentions")],
+            [Button.inline("💬 Приватные сообщения", b"private_messages")],
+            [Button.inline("⚙️ Настройки", b"settings")],
+        ]
+
+    # Full menu for owner
     buttons = [
         [Button.inline("📅 Расписание статусов", b"schedule")],
         [Button.inline("📝 Автоответы", b"replies")],
@@ -310,8 +375,19 @@ def get_meeting_keyboard():
         ]
 
 
-def get_settings_keyboard():
-    """Settings keyboard."""
+def get_settings_keyboard(is_personal: bool = False):
+    """Settings keyboard.
+
+    Args:
+        is_personal: If True, show limited settings for personal account
+    """
+    if is_personal:
+        # Personal account has no settings to configure
+        return [
+            [Button.inline("« Назад", b"main")],
+        ]
+
+    # Full settings for owner
     personal_chat_id = Settings.get_personal_chat_id()
     personal_text = "👤 Персональный чат ✓" if personal_chat_id else "👤 Персональный чат"
 
@@ -594,31 +670,32 @@ def register_bot_handlers(bot, user_client=None):
             return
 
         # User client authorized - check if owner
-        if not await _is_owner(event):
-            await event.respond("⛔ Доступ запрещён. Этот бот только для владельца.")
+        if not await _has_access(event):
             return
 
+        is_personal = await _is_personal(event)
         await event.respond(
             "🤖 **Ваш ассистент**\n\n"
             "Выберите раздел:",
-            buttons=get_main_menu_keyboard()
+            buttons=get_main_menu_keyboard(is_personal=is_personal)
         )
 
     @bot.on(events.CallbackQuery(data=b"main"))
     async def main_menu(event):
         """Return to main menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
-        # Delete user client messages when returning to main menu
-        await _delete_emoji_list_message()
-        await _delete_schedule_list_message()
+        # Delete user client messages when returning to main menu (only for owner)
+        is_personal = await _is_personal(event)
+        if not is_personal:
+            await _delete_emoji_list_message()
+            await _delete_schedule_list_message()
 
         await event.edit(
             "🤖 **Ваш ассистент**\n\n"
             "Выберите раздел:",
-            buttons=get_main_menu_keyboard()
+            buttons=get_main_menu_keyboard(is_personal=is_personal)
         )
 
     # =========================================================================
@@ -709,8 +786,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"status"))
     async def status_handler(event):
         """Show current status."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         # Get schedule status
@@ -748,8 +824,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"replies"))
     async def replies_menu(event):
         """Show replies menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to replies (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         # Clear add mode when returning to menu
@@ -772,8 +852,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"replies_list"))
     async def replies_list(event):
         """List all configured replies as buttons."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         replies = Reply().select(SQL())
@@ -862,8 +941,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=b"reply_view:(.+)"))
     async def reply_view(event):
         """View a specific reply - show actual reply text via user client."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         emoji_id = event.pattern_match.group(1).decode()
@@ -902,8 +980,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=b"reply_save:(.+)"))
     async def reply_save(event):
         """Save the edited reply from user client message."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         emoji_id = event.pattern_match.group(1).decode()
@@ -942,8 +1019,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=b"reply_del_confirm:(.+)"))
     async def reply_delete_confirm(event):
         """Ask for delete confirmation."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         emoji_id = event.pattern_match.group(1).decode()
@@ -958,8 +1034,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=b"reply_del:(.+)"))
     async def reply_delete(event):
         """Delete a reply."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         emoji_id = event.pattern_match.group(1).decode()
@@ -982,8 +1057,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule"))
     async def schedule_menu(event):
         """Show schedule menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to schedule (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         # Clean up messages from other sections or list view
@@ -1000,8 +1079,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_list"))
     async def schedule_list_handler(event):
         """List all schedule rules with custom emoji display."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         schedules = Schedule.get_all()
@@ -1125,8 +1203,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_on"))
     async def schedule_enable(event):
         """Enable scheduling."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Schedule.set_scheduling_enabled(True)
@@ -1139,8 +1216,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_off"))
     async def schedule_disable(event):
         """Disable scheduling."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Schedule.set_scheduling_enabled(False)
@@ -1153,8 +1229,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_clear_confirm"))
     async def schedule_clear_confirm(event):
         """Confirm schedule clear."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         await event.edit(
@@ -1166,8 +1241,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"confirm_schedule_clear"))
     async def schedule_clear(event):
         """Clear all schedule rules."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Schedule.delete_all()
@@ -1184,8 +1258,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=rb"schedule_del_(\d+)"))
     async def schedule_delete_rule(event):
         """Delete a specific schedule rule by ID."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         match = event.pattern_match
@@ -1203,8 +1276,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_work_edit"))
     async def schedule_work_edit_start(event):
         """Start editing work schedule time."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         work = Schedule.get_work_schedule()
@@ -1227,8 +1299,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_work_edit_cancel"))
     async def schedule_work_edit_cancel(event):
         """Cancel work schedule time editing."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_work_time_edit.discard(event.sender_id)
@@ -1238,8 +1309,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_morning"))
     async def schedule_morning_start(event):
         """Start setting morning emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         work = Schedule.get_work_schedule()
@@ -1262,8 +1332,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_morning_cancel"))
     async def schedule_morning_cancel(event):
         """Cancel morning emoji setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_morning_emoji.discard(event.sender_id)
@@ -1273,8 +1342,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_evening"))
     async def schedule_evening_start(event):
         """Start setting evening emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         work = Schedule.get_work_schedule()
@@ -1297,8 +1365,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_evening_cancel"))
     async def schedule_evening_cancel(event):
         """Cancel evening emoji setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_evening_emoji.discard(event.sender_id)
@@ -1308,8 +1375,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_weekend"))
     async def schedule_weekend_start(event):
         """Start setting weekend emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         weekend = Schedule.get_weekend_schedule()
@@ -1327,8 +1393,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_weekend_cancel"))
     async def schedule_weekend_cancel(event):
         """Cancel weekend emoji setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_weekend_emoji.discard(event.sender_id)
@@ -1338,8 +1403,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_rest"))
     async def schedule_rest_start(event):
         """Start setting rest/fallback emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         rest = Schedule.get_rest_schedule()
@@ -1357,8 +1421,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_rest_cancel"))
     async def schedule_rest_cancel(event):
         """Cancel rest emoji setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_rest_emoji.discard(event.sender_id)
@@ -1368,8 +1431,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_override_add"))
     async def schedule_override_add_start(event):
         """Start adding an override schedule."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_override_dates.add(event.sender_id)
@@ -1387,8 +1449,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"schedule_override_cancel"))
     async def schedule_override_cancel(event):
         """Cancel override creation."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_override_dates.discard(event.sender_id)
@@ -1404,8 +1465,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"meeting"))
     async def meeting_menu(event):
         """Show meeting menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         active = Schedule.get_active_meeting()
@@ -1427,8 +1487,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"meeting_start"))
     async def meeting_start(event):
         """Start a meeting."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         meeting_emoji_id = Settings.get('meeting_emoji_id')
@@ -1446,8 +1505,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"meeting_end"))
     async def meeting_end(event):
         """End a meeting."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Schedule.end_meeting()
@@ -1468,8 +1526,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"calendar"))
     async def calendar_menu(event):
         """Show calendar sync menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to calendar (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         is_configured = Settings.is_caldav_configured()
@@ -1531,8 +1593,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"calendar_on"))
     async def calendar_enable(event):
         """Enable calendar sync."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         if not Settings.is_caldav_configured():
@@ -1548,8 +1609,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"calendar_off"))
     async def calendar_disable(event):
         """Disable calendar sync."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_calendar_sync_enabled(False)
@@ -1566,8 +1626,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"calendar_emoji_setup"))
     async def calendar_emoji_setup(event):
         """Show emoji setup menu for calendar events."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         meeting_emoji = Settings.get('meeting_emoji_id')
@@ -1597,8 +1656,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"set_meeting_emoji"))
     async def set_meeting_emoji_start(event):
         """Start setting meeting emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_meeting_emoji.add(event.sender_id)
@@ -1617,8 +1675,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"set_absence_emoji"))
     async def set_absence_emoji_start(event):
         """Start setting absence emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_absence_emoji.add(event.sender_id)
@@ -1638,8 +1695,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"calendar_test"))
     async def calendar_test(event):
         """Test CalDAV connection."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         await event.answer("🔄 Проверяю...")
@@ -1676,8 +1732,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"calendar_setup"))
     async def calendar_setup_menu(event):
         """Show CalDAV setup menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         url = Settings.get_caldav_url()
@@ -1722,8 +1777,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"caldav_url"))
     async def caldav_url_start(event):
         """Start setting CalDAV URL."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_caldav_url.add(event.sender_id)
@@ -1741,8 +1795,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"caldav_user"))
     async def caldav_user_start(event):
         """Start setting CalDAV username."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_caldav_username.add(event.sender_id)
@@ -1760,8 +1813,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"caldav_pass"))
     async def caldav_pass_start(event):
         """Start setting CalDAV password."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_caldav_password.add(event.sender_id)
@@ -1776,8 +1828,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"caldav_calendars"))
     async def caldav_calendars_menu(event):
         """Show available calendars with type selection."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         if not Settings.is_caldav_configured():
@@ -1846,8 +1897,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=rb"cal_type:(.+)"))
     async def caldav_calendar_cycle_type(event):
         """Cycle calendar type: none -> meeting -> absence -> none."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         calendar_name = event.pattern_match.group(1).decode().strip()
@@ -1873,8 +1923,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"caldav_calendars_reset"))
     async def caldav_calendars_reset(event):
         """Reset all calendar type configurations."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_caldav_meeting_calendars([])
@@ -1888,8 +1937,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"caldav_cancel"))
     async def caldav_cancel(event):
         """Cancel CalDAV setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_caldav_url.discard(event.sender_id)
@@ -1905,8 +1953,15 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"settings"))
     async def settings_menu(event):
         """Show settings menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        is_personal = await _is_personal(event)
+
+        if is_personal:
+            # Simplified settings for personal account
+            text = "⚙️ **Настройки**\n\n_Вы используете бота как персональный аккаунт._"
+            await event.edit(text, buttons=get_settings_keyboard(is_personal=True))
             return
 
         text = "⚙️ **Настройки**\n\n"
@@ -1930,8 +1985,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"logout_confirm"))
     async def logout_confirm(event):
         """Confirm logout."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account cannot logout
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         await event.edit(
@@ -1944,8 +2003,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"confirm_logout"))
     async def logout(event):
         """Logout from user client."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account cannot logout
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         global _owner_id, _owner_username
@@ -2001,8 +2064,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"private_messages"))
     async def private_messages_menu(event):
         """Show private messages settings menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         webhook_url = Settings.get_asap_webhook_url()
@@ -2040,8 +2102,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"pm_personal_chat"))
     async def pm_personal_chat_start(event):
         """Start setting personal chat."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account cannot configure personal chat
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         _pending_personal_chat.add(event.sender_id)
@@ -2073,8 +2139,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"pm_personal_chat_cancel"))
     async def pm_personal_chat_cancel(event):
         """Cancel personal chat setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_personal_chat.discard(event.sender_id)
@@ -2084,12 +2149,13 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"pm_personal_chat_clear"))
     async def pm_personal_chat_clear(event):
         """Clear personal chat setting."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_personal_chat.discard(event.sender_id)
         Settings.set_personal_chat_id(None)
+        # Also clear personal account access (will fallback to env PERSONAL_TG_LOGIN)
+        clear_personal_account()
         logger.info("Personal chat cleared")
         await event.answer("✅ Персональный чат очищен")
         await settings_menu(event)
@@ -2097,8 +2163,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"asap_on"))
     async def asap_enable(event):
         """Enable ASAP notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_asap_enabled(True)
@@ -2109,8 +2174,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"asap_off"))
     async def asap_disable(event):
         """Disable ASAP notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_asap_enabled(False)
@@ -2121,8 +2185,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_asap_on"))
     async def vip_asap_enable(event):
         """Enable VIP as ASAP notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_vip_as_asap_enabled(True)
@@ -2133,8 +2196,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_asap_off"))
     async def vip_asap_disable(event):
         """Disable VIP as ASAP notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_vip_as_asap_enabled(False)
@@ -2148,8 +2210,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"asap_cooldown"))
     async def asap_cooldown_start(event):
         """Start setting ASAP cooldown."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_asap_cooldown.add(event.sender_id)
@@ -2170,8 +2231,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"asap_cooldown_cancel"))
     async def asap_cooldown_cancel(event):
         """Cancel cooldown setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_asap_cooldown.discard(event.sender_id)
@@ -2181,8 +2241,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"pm_webhook"))
     async def pm_webhook_start(event):
         """Start setting webhook URL."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_asap_webhook.add(event.sender_id)
@@ -2210,8 +2269,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"pm_webhook_cancel"))
     async def pm_webhook_cancel(event):
         """Cancel webhook setup."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_asap_webhook.discard(event.sender_id)
@@ -2221,8 +2279,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"pm_webhook_clear"))
     async def pm_webhook_clear(event):
         """Clear webhook URL."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_asap_webhook.discard(event.sender_id)
@@ -2254,8 +2311,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"reply_add"))
     async def reply_add_start(event):
         """Start adding a new reply - wait for emoji."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         # Enable add mode for this user
@@ -2461,9 +2517,9 @@ def register_bot_handlers(bot, user_client=None):
                 return
 
         # =====================================================================
-        # Reply/Schedule setup flow (only for authorized owner)
+        # Reply/Schedule setup flow (only for authorized users)
         # =====================================================================
-        if not await _is_owner(event):
+        if not await _has_access(event):
             return
 
         # Check if user is editing online mention delay
@@ -3014,10 +3070,20 @@ def register_bot_handlers(bot, user_client=None):
 
             Settings.set_personal_chat_id(chat_id)
             _pending_personal_chat.discard(event.sender_id)
+
+            # Also grant bot access to this user
+            set_personal_id(chat_id)
+            try:
+                entity = await _user_client.get_entity(chat_id)
+                if hasattr(entity, 'username') and entity.username:
+                    set_personal_username(entity.username)
+            except Exception:
+                pass
+
             logger.info(f"Personal chat set to {chat_id} ({chat_name})")
 
             await event.respond(
-                f"✅ Персональный чат установлен!\n\n**{chat_name}**\n\nASAP уведомления будут приходить в этот чат.",
+                f"✅ Персональный чат установлен!\n\n**{chat_name}**\n\nASAP уведомления будут приходить в этот чат.\n\nЭтому пользователю также доступны настройки бота.",
                 buttons=[[Button.inline("« Назад", b"settings")]]
             )
             return
@@ -3233,7 +3299,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"cancel_reply_setup"))
     async def cancel_reply_setup(event):
         """Cancel reply setup."""
-        if not await _is_owner(event):
+        if not await _has_access(event):
             return
 
         # Clear both add mode and pending setup
@@ -3253,8 +3319,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"autoreply_toggle_on"))
     async def autoreply_toggle_on(event):
         """Enable autoreply."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_autoreply_enabled(True)
@@ -3265,8 +3330,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"autoreply_toggle_off"))
     async def autoreply_toggle_off(event):
         """Disable autoreply."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_autoreply_enabled(False)
@@ -3281,8 +3345,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"mentions"))
     async def mentions_menu(event):
         """Show mentions configuration menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         offline_status = "✅" if Settings.is_offline_mention_enabled() else "❌"
@@ -3304,8 +3367,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"mention_offline"))
     async def mention_offline_menu(event):
         """Show offline mention settings."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         is_enabled = Settings.is_offline_mention_enabled()
@@ -3323,8 +3385,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"mention_online"))
     async def mention_online_menu(event):
         """Show online mention settings."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         is_enabled = Settings.is_online_mention_enabled()
@@ -3348,8 +3409,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"offline_mention_on"))
     async def offline_mention_enable(event):
         """Enable offline mention notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_offline_mention_enabled(True)
@@ -3360,8 +3420,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"offline_mention_off"))
     async def offline_mention_disable(event):
         """Disable offline mention notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_offline_mention_enabled(False)
@@ -3372,8 +3431,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"online_mention_on"))
     async def online_mention_enable(event):
         """Enable online mention notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_online_mention_enabled(True)
@@ -3384,8 +3442,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"online_mention_off"))
     async def online_mention_disable(event):
         """Disable online mention notifications."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_online_mention_enabled(False)
@@ -3399,8 +3456,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"online_delay_edit"))
     async def online_delay_edit_start(event):
         """Start editing online mention delay."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_delay_edit.add(event.sender_id)
@@ -3419,8 +3475,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"online_delay_cancel"))
     async def online_delay_cancel(event):
         """Cancel delay editing."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_delay_edit.discard(event.sender_id)
@@ -3434,8 +3489,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"mention_vip"))
     async def mention_vip_menu(event):
         """Show VIP management menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         users = VipList.get_users()
@@ -3454,8 +3508,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_users"))
     async def vip_users_menu(event):
         """Show VIP users list."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         users = VipList().select(SQL().WHERE('item_type', '=', 'user')) or []
@@ -3473,8 +3526,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_chats"))
     async def vip_chats_menu(event):
         """Show VIP chats list."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         chats = VipList().select(SQL().WHERE('item_type', '=', 'chat')) or []
@@ -3497,8 +3549,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_add_user"))
     async def vip_add_user_start(event):
         """Start adding VIP user."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_vip_user.add(event.sender_id)
@@ -3513,8 +3564,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_add_user_cancel"))
     async def vip_add_user_cancel(event):
         """Cancel adding VIP user."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_vip_user.discard(event.sender_id)
@@ -3524,8 +3574,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_add_chat"))
     async def vip_add_chat_start(event):
         """Start adding VIP chat."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_vip_chat.add(event.sender_id)
@@ -3541,8 +3590,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"vip_add_chat_cancel"))
     async def vip_add_chat_cancel(event):
         """Cancel adding VIP chat."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_vip_chat.discard(event.sender_id)
@@ -3552,8 +3600,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(pattern=rb"vip_del:(\d+)"))
     async def vip_delete(event):
         """Delete VIP entry."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         entry_id = int(event.pattern_match.group(1))
@@ -3573,8 +3620,12 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity"))
     async def productivity_menu(event):
         """Show productivity summary configuration menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
+            return
+
+        # Personal account doesn't have access to productivity (requires user client)
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
             return
 
         is_enabled = Settings.is_productivity_summary_enabled()
@@ -3598,8 +3649,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_now"))
     async def productivity_generate_now(event):
         """Generate productivity summary right now."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         await event.answer("⏳ Генерирую сводку...", alert=False)
@@ -3639,8 +3689,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_on"))
     async def productivity_enable(event):
         """Enable automatic productivity summary."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         # Check if time is set
@@ -3657,8 +3706,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_off"))
     async def productivity_disable(event):
         """Disable automatic productivity summary."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set_productivity_summary_enabled(False)
@@ -3669,8 +3717,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_time"))
     async def productivity_time_start(event):
         """Start setting productivity summary time."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_productivity_time.add(event.sender_id)
@@ -3688,8 +3735,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_time_cancel"))
     async def productivity_time_cancel(event):
         """Cancel time setting."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_productivity_time.discard(event.sender_id)
@@ -3702,8 +3748,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_chats"))
     async def productivity_chats_menu(event):
         """Show productivity extra chats menu."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         extra_chats = Settings.get_productivity_extra_chats()
@@ -3738,8 +3783,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_chat_add"))
     async def productivity_chat_add_start(event):
         """Start adding productivity chat."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_productivity_chat.add(event.sender_id)
@@ -3755,8 +3799,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_chat_add_cancel"))
     async def productivity_chat_add_cancel(event):
         """Cancel adding productivity chat."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         _pending_productivity_chat.discard(event.sender_id)
@@ -3766,8 +3809,7 @@ def register_bot_handlers(bot, user_client=None):
     @bot.on(events.CallbackQuery(data=b"productivity_chat_clear"))
     async def productivity_chat_clear(event):
         """Clear all productivity extra chats."""
-        if not await _is_owner(event):
-            await event.answer("⛔ Доступ запрещён", alert=True)
+        if not await _has_access(event):
             return
 
         Settings.set('productivity_extra_chats', '')
