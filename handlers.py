@@ -325,6 +325,58 @@ def _schedule_pending_mention(
     )
 
 
+async def _send_bot_notification(
+    message: str,
+    duplicate_to_personal: bool = False,
+    silent: bool = False,
+    formatting_entities=None
+) -> bool:
+    """
+    Send notification via bot to owner, optionally duplicate to personal account.
+
+    Args:
+        message: Notification text
+        duplicate_to_personal: If True, also send to personal account
+        silent: If True, send without sound
+        formatting_entities: Optional message formatting entities
+
+    Returns:
+        True if notification was sent successfully to owner
+    """
+    if not _bot_client:
+        logger.warning("Bot client not available for notification")
+        return False
+
+    from bot_handlers import get_owner_id, get_personal_id
+    owner_id = get_owner_id()
+    if not owner_id:
+        logger.warning("Owner ID not available for notification")
+        return False
+
+    await _bot_client.send_message(
+        owner_id,
+        message,
+        silent=silent,
+        formatting_entities=formatting_entities
+    )
+
+    if duplicate_to_personal:
+        personal_target = Settings.get_personal_chat_id() or get_personal_id()
+        if personal_target and personal_target != owner_id:
+            try:
+                await _bot_client.send_message(
+                    personal_target,
+                    message,
+                    silent=silent,
+                    formatting_entities=formatting_entities
+                )
+                logger.info("Notification duplicated to personal account")
+            except Exception as e:
+                logger.warning(f"Failed to duplicate notification to personal account: {e}")
+
+    return True
+
+
 def register_handlers(client, bot=None):
     """
     Register all Telegram event handlers on the client.
@@ -362,22 +414,22 @@ def register_handlers(client, bot=None):
             sender_id: Sender's numeric ID
             is_vip: Whether this is a VIP-triggered notification
         """
-        personal_chat_id = Settings.get_personal_chat_id()
-        notification_target = personal_chat_id or config.personal_tg_login
-
         if is_vip:
             notification_message = f'❗️Срочное сообщение от VIP @{sender_username}'
         else:
             notification_message = _notification_service.format_asap_message(sender_username, sender_id)
 
-        await client.send_message(
-            notification_target,
-            notification_message,
+        sent = await _send_bot_notification(
+            message=notification_message,
+            duplicate_to_personal=True,
             formatting_entities=[MessageEntityCustomEmoji(offset=0, length=2, document_id=5379748062124056162)]
         )
 
         log_type = "VIP" if is_vip else "ASAP"
-        logger.info(f"{log_type} notification sent for message from {sender_username or sender_id}")
+        if sent:
+            logger.info(f"{log_type} notification sent via bot for message from {sender_username or sender_id}")
+        else:
+            logger.warning(f"Failed to send {log_type} notification via bot for {sender_username or sender_id}")
 
         # Record notification time for cooldown
         _notification_service.record_asap_notification(sender_id)
@@ -404,10 +456,9 @@ def register_handlers(client, bot=None):
         if not Settings.is_asap_enabled():
             return
 
-        # Check if personal chat is configured
-        personal_chat_id = Settings.get_personal_chat_id()
-        if not personal_chat_id and not config.personal_tg_login:
-            logger.debug("ASAP notification skipped: no personal chat configured")
+        # Check if bot is available for sending notifications
+        if not _bot_client:
+            logger.debug("ASAP notification skipped: bot client not available")
             return
 
         sender = await event.get_sender()
@@ -449,9 +500,8 @@ def register_handlers(client, bot=None):
         if not Settings.is_asap_enabled():
             return
 
-        # Check if personal chat is configured
-        personal_chat_id = Settings.get_personal_chat_id()
-        if not personal_chat_id and not config.personal_tg_login:
+        # Check if bot is available for sending notifications
+        if not _bot_client:
             return
 
         sender = await event.get_sender()
@@ -675,13 +725,13 @@ def register_handlers(client, bot=None):
             notification = notification.replace("🚨 Срочное упоминание в группе!", "🚨 Срочное упоминание (вы онлайн)!")
 
         # Send notification
-        # - Offline: send immediately via user client
-        # - Online + VIP urgent: send immediately via bot
+        # - Offline: send via bot to owner + duplicate to personal
+        # - Online + VIP urgent: send immediately via bot to owner
         # - Online + not VIP: schedule with delay (check if read before sending)
         try:
             if is_online and _bot_client:
                 if is_vip:
-                    # VIP mentions are always sent immediately
+                    # VIP mentions are always sent immediately via bot to owner
                     from bot_handlers import get_owner_id
                     owner_id = get_owner_id()
                     if owner_id:
@@ -702,13 +752,16 @@ def register_handlers(client, bot=None):
                         sender_name=sender_name
                     )
             else:
-                # Offline or no bot: send immediately via user client
-                await client.send_message(
-                    config.personal_tg_login,
-                    notification,
+                # Offline: send via bot to owner + duplicate to personal
+                sent = await _send_bot_notification(
+                    message=notification,
+                    duplicate_to_personal=True,
                     silent=not is_urgent
                 )
-                logger.info(f"Mention notification sent via user client (offline, urgent={is_urgent})")
+                if sent:
+                    logger.info(f"Mention notification sent via bot (offline, urgent={is_urgent})")
+                else:
+                    logger.warning("Failed to send offline mention notification via bot")
         except Exception as e:
             logger.error(f"Failed to send mention notification: {e}")
 
