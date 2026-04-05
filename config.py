@@ -120,6 +120,12 @@ class Config:
         default_factory=lambda: os.environ.get('PRODUCTIVITY_SUMMARY_TIME') or None
     )
 
+    # Feature flag: enable AI summarization (Yandex GPT)
+    # Set to "true" or "1" to enable; disabled by default
+    summarization_enabled: bool = field(
+        default_factory=lambda: os.environ.get('SUMMARIZATION_ENABLED', '').lower() in ('true', '1', 'yes')
+    )
+
     # CalDAV calendar integration - how often to check calendar (in seconds)
     # CalDAV connection settings are configured via bot interface
     caldav_check_interval: int = field(
