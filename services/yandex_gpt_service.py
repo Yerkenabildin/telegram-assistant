@@ -371,10 +371,15 @@ def get_yandex_gpt_service() -> Optional[YandexGPTService]:
     """
     global _service_instance
 
+    from config import config
+
+    if not config.summarization_enabled:
+        _service_instance = None
+        logger.debug("Summarization is disabled by feature flag (SUMMARIZATION_ENABLED)")
+        return None
+
     if _service_instance is not None:
         return _service_instance
-
-    from config import config
 
     if not config.yandex_api_key or not config.yandex_folder_id:
         logger.debug("Yandex GPT not configured (missing API key or folder ID)")
