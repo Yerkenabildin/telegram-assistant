@@ -66,6 +66,9 @@ PRIORITY_MEETING = 50    # Active meeting/call (via API or calendar)
 PRIORITY_ABSENCE = 75    # Absence from calendar (OOO, vacation calendar events)
 PRIORITY_OVERRIDE = 100  # Override rules (vacation, sick leave, etc.)
 
+# Sentinel emoji value for the fallback reply used when no emoji status is set
+DEFAULT_REPLY_EMOJI = "default"
+
 
 class Reply(Model):
     """
