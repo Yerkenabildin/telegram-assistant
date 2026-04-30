@@ -70,7 +70,7 @@ from sqlitemodel import SQL
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, Schedule, VipList, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
+from models import DEFAULT_REPLY_EMOJI, Reply, Settings, Schedule, VipList, PRIORITY_REST, PRIORITY_MORNING, PRIORITY_EVENING, PRIORITY_WEEKENDS, PRIORITY_WORK, PRIORITY_MEETING, PRIORITY_OVERRIDE
 from services.caldav_service import caldav_service
 
 
@@ -564,6 +564,7 @@ def get_replies_keyboard():
 
     return [
         [Button.inline("📋 Список автоответов", b"replies_list")],
+        [Button.inline("⭐ Дефолтный ответ", b"reply_default")],
         [Button.inline("➕ Добавить", b"reply_add")],
         [Button.inline(toggle_text, toggle_data)],
         [Button.inline("« Назад", b"main")],
@@ -834,6 +835,7 @@ def register_bot_handlers(bot, user_client=None):
 
         # Clear add mode when returning to menu
         _pending_reply_add_mode.discard(event.sender_id)
+        _pending_default_reply_setup.discard(event.sender_id)
 
         # Clean up user client messages when switching sections
         await _delete_emoji_list_message()
@@ -844,6 +846,8 @@ def register_bot_handlers(bot, user_client=None):
             "Для настройки автоответа отправьте боту:\n"
             "1. Сообщение с эмодзи-статусом\n"
             "2. Затем текст автоответа\n\n"
+            "⭐ **Дефолтный ответ** — единый шаблон,\n"
+            "который отправляется, когда эмодзи-статус не установлен.\n\n"
             "Или используйте список для просмотра."
         )
 
@@ -855,7 +859,7 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
-        replies = Reply().select(SQL())
+        replies = [r for r in Reply().select(SQL()) if r.emoji != DEFAULT_REPLY_EMOJI]
 
         if not replies:
             await event.edit(
@@ -2296,6 +2300,8 @@ def register_bot_handlers(bot, user_client=None):
     _pending_reply_setup: dict[int, int] = {}
     # Store users in "add mode" waiting for emoji
     _pending_reply_add_mode: set[int] = set()
+    # Store users waiting to input the default (no-emoji-status) reply text
+    _pending_default_reply_setup: set[int] = set()
     # Store users waiting to input work schedule time
     _pending_work_time_edit: set[int] = set()
     # Store users waiting to input morning/evening emoji
@@ -2323,6 +2329,72 @@ def register_bot_handlers(bot, user_client=None):
             "для которого хотите настроить автоответ.",
             buttons=[[Button.inline("❌ Отмена", b"replies")]]
         )
+
+    @bot.on(events.CallbackQuery(data=b"reply_default"))
+    async def reply_default_view(event):
+        """Show or set up the default (no-emoji-status) reply."""
+        if not await _has_access(event):
+            return
+
+        if await _is_personal(event):
+            await event.answer("❌ Недоступно", alert=True)
+            return
+
+        reply = Reply.get_by_emoji(DEFAULT_REPLY_EMOJI)
+
+        if reply is None:
+            _pending_default_reply_setup.add(event.sender_id)
+            await event.edit(
+                "⭐ **Дефолтный автоответ**\n\n"
+                "Срабатывает, когда у вас не установлен эмодзи-статус.\n\n"
+                "Отправьте боту текст, который будет использоваться "
+                "как дефолтный автоответ.",
+                buttons=[[Button.inline("❌ Отмена", b"replies")]]
+            )
+            return
+
+        msg = reply.message
+        preview = (msg.text or msg.message or "(пустое сообщение)") if msg else "(пустое сообщение)"
+
+        await event.edit(
+            "⭐ **Дефолтный автоответ**\n\n"
+            "Срабатывает, когда у вас не установлен эмодзи-статус.\n\n"
+            f"Текущий текст:\n```\n{preview}\n```",
+            buttons=[
+                [Button.inline("✏️ Изменить", b"reply_default_edit")],
+                [Button.inline("🗑 Удалить", b"reply_default_delete")],
+                [Button.inline("« Назад", b"replies")],
+            ]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"reply_default_edit"))
+    async def reply_default_edit(event):
+        """Ask the user for a new default reply text."""
+        if not await _has_access(event):
+            return
+
+        _pending_default_reply_setup.add(event.sender_id)
+        await event.edit(
+            "⭐ **Изменить дефолтный автоответ**\n\n"
+            "Отправьте боту новый текст автоответа.",
+            buttons=[[Button.inline("❌ Отмена", b"replies")]]
+        )
+
+    @bot.on(events.CallbackQuery(data=b"reply_default_delete"))
+    async def reply_default_delete(event):
+        """Delete the default reply."""
+        if not await _has_access(event):
+            return
+
+        reply = Reply.get_by_emoji(DEFAULT_REPLY_EMOJI)
+        if reply:
+            reply.delete()
+            logger.info("Default reply deleted via bot")
+            await event.answer("✅ Дефолтный автоответ удалён")
+        else:
+            await event.answer("❌ Дефолтный автоответ не найден", alert=True)
+
+        await reply_default_view(event)
 
     @bot.on(events.NewMessage(func=lambda e: e.is_private))
     async def handle_private_message(event):
@@ -3262,6 +3334,20 @@ def register_bot_handlers(bot, user_client=None):
             )
             return
 
+        # Default reply (no emoji status) - waiting for text
+        if event.sender_id in _pending_default_reply_setup:
+            _pending_default_reply_setup.discard(event.sender_id)
+
+            Reply.create(DEFAULT_REPLY_EMOJI, event.message)
+            logger.info("Default reply set via bot")
+
+            await event.respond(
+                "✅ Дефолтный автоответ сохранён!\n\n"
+                "Срабатывает, когда у вас не установлен эмодзи-статус.",
+                buttons=get_main_menu_keyboard()
+            )
+            return
+
         # Check if we have pending emoji (waiting for reply text) - FIRST!
         if event.sender_id in _pending_reply_setup:
             emoji_id = _pending_reply_setup.pop(event.sender_id)
@@ -3302,8 +3388,9 @@ def register_bot_handlers(bot, user_client=None):
         if not await _has_access(event):
             return
 
-        # Clear both add mode and pending setup
+        # Clear add mode and pending setup
         _pending_reply_add_mode.discard(event.sender_id)
+        _pending_default_reply_setup.discard(event.sender_id)
         if event.sender_id in _pending_reply_setup:
             del _pending_reply_setup[event.sender_id]
 

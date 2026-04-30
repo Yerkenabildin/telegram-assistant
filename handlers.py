@@ -17,7 +17,7 @@ from telethon.tl.types import MessageEntityCustomEmoji
 
 from config import config
 from logging_config import logger
-from models import Reply, Settings, VipList
+from models import DEFAULT_REPLY_EMOJI, Reply, Settings, VipList
 from services.autoreply_service import AutoReplyService
 from services.notification_service import NotificationService
 from services.mention_service import MentionService
@@ -782,7 +782,10 @@ def register_handlers(client, bot=None):
         me = await client.get_me()
         emoji_status_id = me.emoji_status.document_id if me.emoji_status else None
 
-        reply = Reply.get_by_emoji(emoji_status_id) if emoji_status_id else None
+        if emoji_status_id is not None:
+            reply = Reply.get_by_emoji(emoji_status_id)
+        else:
+            reply = Reply.get_by_emoji(DEFAULT_REPLY_EMOJI)
 
         sender_username = getattr(sender, 'username', None)
         sender_id = getattr(sender, 'id', 0)

@@ -46,18 +46,14 @@ class AutoReplyService:
         Returns:
             True if auto-reply should be sent
         """
-        # No emoji status set
-        if emoji_status_id is None:
-            logger.debug("No emoji status set, skipping auto-reply")
-            return False
+        # If emoji status is set, work/available emoji means "online" — skip
+        if emoji_status_id is not None:
+            work_emoji_id = Schedule.get_work_emoji_id()
+            if work_emoji_id is not None and emoji_status_id == work_emoji_id:
+                logger.debug("User is available (work emoji), skipping auto-reply")
+                return False
 
-        # Get work emoji from schedule - if set, user is "available" when it matches
-        work_emoji_id = Schedule.get_work_emoji_id()
-        if work_emoji_id is not None and emoji_status_id == work_emoji_id:
-            logger.debug("User is available (work emoji), skipping auto-reply")
-            return False
-
-        # No reply template configured
+        # No reply template configured (regular per-emoji or default fallback)
         if not reply_exists:
             logger.debug(f"No reply template for emoji {emoji_status_id}")
             return False

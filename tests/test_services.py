@@ -95,6 +95,53 @@ class TestAutoReplyServiceShouldSendReply:
         assert result is True
 
 
+class TestAutoReplyServiceDefaultReply:
+    """Tests covering the default (no-emoji-status) auto-reply behavior."""
+
+    def _make_service(self, work_emoji_id):
+        # test_caldav_service.py replaces services.autoreply_service with a
+        # MagicMock via sys.modules; that pollution can persist across files,
+        # so force a fresh real import here.
+        sys.modules.pop('services.autoreply_service', None)
+        import services.autoreply_service as ars
+        # Replace the Schedule reference on the module directly — this is
+        # robust against sys.modules['models'] being a MagicMock too.
+        fake_schedule = MagicMock()
+        fake_schedule.get_work_emoji_id.return_value = work_emoji_id
+        ars.Schedule = fake_schedule
+        return ars.AutoReplyService(cooldown_minutes=15)
+
+    def test_no_emoji_status_with_default_template_sends(self):
+        """When emoji status is unset, a configured default template triggers a reply."""
+        service = self._make_service(work_emoji_id=None)
+        result = service.should_send_reply(
+            emoji_status_id=None,
+            reply_exists=True,
+            last_outgoing_message=None,
+        )
+        assert result is True
+
+    def test_no_emoji_status_without_default_template_skips(self):
+        """When emoji status is unset and no default template exists, skip."""
+        service = self._make_service(work_emoji_id=None)
+        result = service.should_send_reply(
+            emoji_status_id=None,
+            reply_exists=False,
+            last_outgoing_message=None,
+        )
+        assert result is False
+
+    def test_work_emoji_check_skipped_when_no_emoji_status(self):
+        """Work-emoji guard does not apply when emoji_status_id is None."""
+        service = self._make_service(work_emoji_id=42)
+        result = service.should_send_reply(
+            emoji_status_id=None,
+            reply_exists=True,
+            last_outgoing_message=None,
+        )
+        assert result is True
+
+
 class TestAutoReplyServiceRateLimiting:
     """Tests for AutoReplyService rate limiting."""
 
